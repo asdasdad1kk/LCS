@@ -1,0 +1,110 @@
+[
+  {
+    "file": "txt.shx",
+    "name": [
+      "txt"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "simplex.shx",
+    "name": [
+      "simplex"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "romans.shx",
+    "name": [
+      "romans"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "romand.shx",
+    "name": [
+      "romand"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "romant.shx",
+    "name": [
+      "romant"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "italic.shx",
+    "name": [
+      "italic"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "isocp.shx",
+    "name": [
+      "isocp"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "isocp2.shx",
+    "name": [
+      "isocp2"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "isocp3.shx",
+    "name": [
+      "isocp3"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "amgdt.shx",
+    "name": [
+      "amgdt"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "ltypeshp.shx",
+    "name": [
+      "ltypeshp"
+    ],
+    "type": "shx"
+  },
+  {
+    "file": "arial.woff",
+    "name": [
+      "arial"
+    ],
+    "type": "mesh"
+  },
+  {
+    "file": "tahoma.woff",
+    "name": [
+      "tahoma"
+    ],
+    "type": "mesh"
+  },
+  {
+    "file": "verdana.woff",
+    "name": [
+      "verdana"
+    ],
+    "type": "mesh"
+  },
+  {
+    "file": "simsun.woff",
+    "name": [
+      "simsun",
+      "宋体",
+      "中易宋体",
+      "微软宋体"
+    ],
+    "type": "mesh"
+  }
+]

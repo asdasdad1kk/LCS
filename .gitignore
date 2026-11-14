@@ -1,0 +1,22 @@
+# binarios
+/lcs.exe
+/LCS.exe
+/dist/
+
+# frontend
+web/node_modules/
+web/public/workers/
+web/public/cad-data/
+
+# estado local
+*.db
+*.db-shm
+*.db-wal
+/logs/
+data/
+
+# herramientas
+/.vscode/
+/.idea/
+Thumbs.db
+.DS_Store

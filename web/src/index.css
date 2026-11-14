@@ -1,0 +1,133 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.995 0.001 250);
+  --foreground: oklch(0.21 0.012 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.012 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.012 250);
+  --primary: oklch(0.54 0.104 216);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.968 0.004 250);
+  --secondary-foreground: oklch(0.28 0.012 250);
+  --muted: oklch(0.966 0.004 250);
+  --muted-foreground: oklch(0.52 0.014 250);
+  --accent: oklch(0.955 0.014 216);
+  --accent-foreground: oklch(0.30 0.04 216);
+  --destructive: oklch(0.56 0.19 27);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.912 0.006 250);
+  --input: oklch(0.912 0.006 250);
+  --ring: oklch(0.62 0.09 216);
+  --success: oklch(0.55 0.13 155);
+  --warning: oklch(0.65 0.14 75);
+}
+
+.dark {
+  --background: oklch(0.175 0.009 250);
+  --foreground: oklch(0.955 0.004 250);
+  --card: oklch(0.213 0.010 250);
+  --card-foreground: oklch(0.955 0.004 250);
+  --popover: oklch(0.213 0.010 250);
+  --popover-foreground: oklch(0.955 0.004 250);
+  --primary: oklch(0.72 0.11 216);
+  --primary-foreground: oklch(0.18 0.02 216);
+  --secondary: oklch(0.265 0.011 250);
+  --secondary-foreground: oklch(0.94 0.004 250);
+  --muted: oklch(0.262 0.011 250);
+  --muted-foreground: oklch(0.68 0.012 250);
+  --accent: oklch(0.30 0.03 216);
+  --accent-foreground: oklch(0.94 0.02 216);
+  --destructive: oklch(0.62 0.18 27);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.305 0.012 250);
+  --input: oklch(0.325 0.012 250);
+  --ring: oklch(0.60 0.08 216);
+  --success: oklch(0.68 0.13 155);
+  --warning: oklch(0.76 0.13 75);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-mono: ui-monospace, 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  ::selection {
+    @apply bg-primary/20;
+  }
+}
+
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  .hairline {
+    box-shadow: inset 0 -1px 0 0 var(--border);
+  }
+  .grid-paper {
+    background-image:
+      linear-gradient(to right, color-mix(in oklch, var(--border) 55%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--border) 55%, transparent) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+/* The CAD engine ships its own command line and toolbar chrome. LCS is a
+   read-only reviewer, so we keep only the canvas. */
+.lcs-viewer .ml-cli-container,
+.lcs-viewer .ml-mobile-cmd,
+.lcs-viewer .ml-ui-shortcut-toolbar-shell,
+.lcs-viewer .ml-desktop-session-accessory,
+.lcs-viewer .ml-ui-shortcut-collapse-btn,
+.lcs-viewer .ml-ui-notification-center {
+  display: none !important;
+}
+
+.lcs-viewer canvas {
+  display: block;
+}
