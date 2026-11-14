@@ -1,32 +1,68 @@
 import * as React from 'react'
 
-type Theme = 'light' | 'dark'
+type Mode = 'light' | 'dark'
+export type Palette = 'default' | 'windows' | 'glass' | 'plano'
 
-const ThemeContext = React.createContext<{ theme: Theme; toggle: () => void }>({
+export const PALETTES: { id: Palette; name: string; description: string }[] = [
+  { id: 'default', name: 'Default', description: 'Crema cálido y terracota. El tema por defecto.' },
+  { id: 'windows', name: 'Windows moderno', description: 'Fluent: superficies planas, azul de sistema y esquinas suaves.' },
+  { id: 'glass', name: 'Cristal', description: 'Glassmorphism: paneles translúcidos con desenfoque sobre un degradado.' },
+  { id: 'plano', name: 'Plano técnico', description: 'Pizarra azulada con acento petróleo.' }
+]
+
+type ThemeContextValue = {
+  theme: Mode
+  toggle: () => void
+  setTheme: (mode: Mode) => void
+  palette: Palette
+  setPalette: (palette: Palette) => void
+}
+
+const ThemeContext = React.createContext<ThemeContextValue>({
   theme: 'light',
-  toggle: () => {}
+  toggle: () => {},
+  setTheme: () => {},
+  palette: 'default',
+  setPalette: () => {}
 })
 
+const read = (key: string) => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = React.useState<Theme>(() => {
-    const stored = localStorage.getItem('lcs-theme')
+  const [theme, setTheme] = React.useState<Mode>(() => {
+    const stored = read('lcs-theme')
     if (stored === 'light' || stored === 'dark') return stored
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+  const [palette, setPalette] = React.useState<Palette>(() => {
+    const stored = read('lcs-palette')
+    return PALETTES.some((p) => p.id === stored) ? (stored as Palette) : 'default'
   })
 
   React.useEffect(() => {
     const root = document.documentElement
     root.classList.toggle('dark', theme === 'dark')
     root.style.colorScheme = theme
-    localStorage.setItem('lcs-theme', theme)
-  }, [theme])
+    root.dataset.palette = palette
+    try {
+      localStorage.setItem('lcs-theme', theme)
+      localStorage.setItem('lcs-palette', palette)
+    } catch {
+      /* sin almacenamiento: la preferencia dura solo esta sesión */
+    }
+  }, [theme, palette])
 
-  const toggle = React.useCallback(
-    () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
-    []
+  const toggle = React.useCallback(() => setTheme((t) => (t === 'dark' ? 'light' : 'dark')), [])
+
+  return (
+    <ThemeContext.Provider value={{ theme, toggle, setTheme, palette, setPalette }}>{children}</ThemeContext.Provider>
   )
-
-  return <ThemeContext.Provider value={{ theme, toggle }}>{children}</ThemeContext.Provider>
 }
 
 export function useTheme() {

@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   LogOut,
   Moon,
+  Palette,
   PanelLeft,
   Plus,
   Redo2,
@@ -46,12 +47,14 @@ import {
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
+import { AppearanceDialog } from '@/components/appearance-dialog'
 import { NewProjectDialog } from '@/components/new-project-dialog'
 import { toast } from 'sonner'
 
 export function AppShell() {
   const [projects, setProjects] = useState<Project[]>([])
   const [newProject, setNewProject] = useState(false)
+  const [appearance, setAppearance] = useState(false)
   const [me, setMe] = useState<Identity | null>(null)
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const [connected, setConnected] = useState(false)
@@ -127,10 +130,12 @@ export function AppShell() {
         onToggleTheme={toggle}
         onSync={syncAll}
         onNewProject={() => setNewProject(true)}
+        onAppearance={() => setAppearance(true)}
         reloadProjects={load}
         navigate={(to) => (typeof to === 'number' ? navigate(to) : navigate(to))}
       />
 
+      <AppearanceDialog open={appearance} onOpenChange={setAppearance} />
       <NewProjectDialog
         open={newProject}
         onOpenChange={setNewProject}
@@ -155,6 +160,7 @@ type ShellBodyProps = {
   onToggleTheme: () => void
   onSync: () => Promise<void>
   onNewProject: () => void
+  onAppearance: () => void
   reloadProjects: () => Promise<void>
   navigate: (to: string | number) => void
 }
@@ -170,6 +176,7 @@ function ShellBody({
   onToggleTheme,
   onSync,
   onNewProject,
+  onAppearance,
   reloadProjects,
   navigate
 }: ShellBodyProps) {
@@ -212,7 +219,8 @@ function ShellBody({
         { label: 'Actividad', icon: Activity, shortcut: 'Ctrl+5', onSelect: () => navigate('/actividad') },
         { type: 'sep' },
         { label: 'Barra lateral', icon: PanelLeft, shortcut: 'Ctrl+B', checked: open, onSelect: toggleSidebar },
-        { label: theme === 'dark' ? 'Tema claro' : 'Tema oscuro', icon: theme === 'dark' ? Sun : Moon, onSelect: onToggleTheme },
+        { label: 'Apariencia…', icon: Palette, shortcut: 'Ctrl+,', onSelect: onAppearance },
+        { label: theme === 'dark' ? 'Modo claro' : 'Modo oscuro', icon: theme === 'dark' ? Sun : Moon, onSelect: onToggleTheme },
         { type: 'sep' },
         { label: 'Recargar vista', icon: RotateCw, shortcut: 'Ctrl+Shift+R', onSelect: () => window.location.reload() }
       ]
@@ -265,7 +273,9 @@ function ShellBody({
           ? () => void onSync()
           : key === 'b'
             ? toggleSidebar
-            : key === 'q'
+            : key === ','
+              ? onAppearance
+              : key === 'q'
               ? quit
               : null
     if (!action) return

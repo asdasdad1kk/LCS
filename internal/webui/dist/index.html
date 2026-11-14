@@ -5,13 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      // Aplica tema y paleta guardados antes de pintar (evita el parpadeo).
+      try {
+        var r = document.documentElement, t = localStorage.getItem('lcs-theme'), p = localStorage.getItem('lcs-palette');
+        if (t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) r.classList.add('dark');
+        if (p) r.dataset.palette = p;
+      } catch (e) {}
+    </script>
     <title>LCS — Layout Control System</title>
-    <script type="module" crossorigin src="/assets/index-D0iMVQJ7.js"></script>
+    <script type="module" crossorigin src="/assets/index-B8eef8QT.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/three-g_Qeao4l.js">
     <link rel="modulepreload" crossorigin href="/assets/cad-DLZ-Muom.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-BISskdV8.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-CN5JtrHx.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"></div>
   </body>
 </html>

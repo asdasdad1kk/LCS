@@ -5,8 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <!-- Add inside <head> -->
-<script src="https://tweakcn.com/live-preview.min.js"></script>
+    <script>
+      // Aplica tema y paleta guardados antes de pintar (evita el parpadeo).
+      try {
+        var r = document.documentElement, t = localStorage.getItem('lcs-theme'), p = localStorage.getItem('lcs-palette');
+        if (t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) r.classList.add('dark');
+        if (p) r.dataset.palette = p;
+      } catch (e) {}
+    </script>
     <title>LCS — Layout Control System</title>
   </head>
   <body>
