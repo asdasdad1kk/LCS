@@ -6,6 +6,7 @@ import {
   FileUp,
   GitBranch,
   Loader2,
+  PencilLine,
   Upload,
   X
 } from 'lucide-react'
@@ -14,7 +15,8 @@ import {
   importDrawings,
   uploadToBranch,
   type Branch,
-  type Drawing
+  type Drawing,
+  type Editor
 } from '@/lib/api'
 import {
   Dialog,
@@ -75,6 +77,22 @@ export function NewTaskDialog({
   useEffect(() => {
     if (open && preselect) setPicked(preselect)
   }, [open, preselect])
+
+  // Quién ya tiene tareas abiertas sobre estos planos (consulta la carpeta
+  // compartida: puede ser alguien en otro equipo).
+  const [editing, setEditing] = useState<Record<string, Editor[]>>({})
+  useEffect(() => {
+    if (!open || !pid) return
+    let alive = true
+    api
+      .editing(pid)
+      .then((e) => alive && setEditing(e ?? {}))
+      .catch(() => alive && setEditing({}))
+    return () => {
+      alive = false
+    }
+  }, [open, pid])
+  const conflicts = picked.filter((p) => (editing[p]?.length ?? 0) > 0)
 
   const toggle = (path: string) =>
     setPicked((p) => (p.includes(path) ? p.filter((x) => x !== path) : [...p, path]))
@@ -172,7 +190,12 @@ export function NewTaskDialog({
                       {active && <Check className="size-3" />}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{d.name}</span>
-                    <span className="text-muted-foreground shrink-0 font-mono text-[10px]">
+                    {(editing[d.path]?.length ?? 0) > 0 && (
+                      <Badge variant="warning" className="shrink-0 gap-1">
+                        <PencilLine /> {editing[d.path].map((e) => e.author).join(', ')}
+                      </Badge>
+                    )}
+                    <span className="text-muted-foreground tnum shrink-0 text-[11.5px]">
                       {formatBytes(d.size)}
                     </span>
                   </button>
@@ -185,6 +208,29 @@ export function NewTaskDialog({
               )}
             </div>
           </div>
+
+          {conflicts.length > 0 && (
+            <div className="border-warning/40 bg-warning/10 rounded-md border px-3 py-2.5 text-[12.5px] leading-relaxed">
+              <div className="mb-1 flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="text-warning size-4" /> Alguien ya está editando{' '}
+                {conflicts.length === 1 ? 'este plano' : 'estos planos'}
+              </div>
+              <ul className="text-muted-foreground space-y-0.5">
+                {conflicts.flatMap((p) =>
+                  editing[p].map((e) => (
+                    <li key={`${p}-${e.branchId}`}>
+                      <span className="text-foreground font-medium">{fileName(p)}</span>: «{e.title}» de{' '}
+                      {e.author}
+                    </li>
+                  ))
+                )}
+              </ul>
+              <p className="text-muted-foreground mt-1.5">
+                Dos ediciones del mismo DWG no se pueden fusionar: la que se integre después
+                reemplaza a la otra. Conviene coordinarlo antes.
+              </p>
+            </div>
+          )}
 
           <div className="grid gap-1.5">
             <Label htmlFor="t-notes">Notas para quien edita</Label>
@@ -283,7 +329,7 @@ export function ImportDrawingsDialog({
         >
           <FileUp className="text-muted-foreground size-5" />
           <p className="text-[13px] font-medium">Arrastrá los DWG o hacé clic</p>
-          <p className="text-muted-foreground font-mono text-[10px]">solo .dwg</p>
+          <p className="text-muted-foreground text-[11.5px]">Solo archivos .dwg</p>
           <input
             ref={inputRef}
             type="file"
@@ -299,7 +345,7 @@ export function ImportDrawingsDialog({
             {files.map((f, i) => (
               <div key={i} className="flex items-center gap-2 border-b px-3 py-1.5 text-[12px] last:border-b-0">
                 <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                <span className="text-muted-foreground font-mono text-[10px]">{formatBytes(f.size)}</span>
+                <span className="text-muted-foreground tnum text-[11.5px]">{formatBytes(f.size)}</span>
                 <button onClick={() => setFiles((p) => p.filter((_, j) => j !== i))}>
                   <X className="text-muted-foreground size-3.5" />
                 </button>
@@ -412,7 +458,7 @@ export function UploadDialog({
           {file ? (
             <>
               <p className="text-[13px] font-medium">{file.name}</p>
-              <p className="text-muted-foreground font-mono text-[10px]">{formatBytes(file.size)}</p>
+              <p className="text-muted-foreground tnum text-[11.5px]">{formatBytes(file.size)}</p>
             </>
           ) : (
             <>
@@ -469,13 +515,21 @@ export function MergeConflictDialog({
   onOpenChange,
   paths,
   busy,
-  onForce
+  onForce,
+  title = 'Main cambió el mismo plano',
+  description,
+  note,
+  forceLabel = 'Imponer mi versión'
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   paths: string[]
   busy: boolean
   onForce: () => void
+  title?: string
+  description?: React.ReactNode
+  note?: React.ReactNode
+  forceLabel?: string
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -484,10 +538,14 @@ export function MergeConflictDialog({
           <div className="text-warning mb-1 flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
             <AlertTriangle className="size-3.5" /> conflicto de revisión
           </div>
-          <DialogTitle>Main cambió el mismo plano</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Estos archivos se modificaron en <span className="font-mono">main</span> desde que abriste
-            la rama. Podés descartar tu versión o imponerla como definitiva.
+            {description ?? (
+              <>
+                Estos archivos se modificaron en <span className="font-mono">main</span> desde que
+                abriste la rama. Podés descartar tu versión o imponerla como definitiva.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -500,8 +558,12 @@ export function MergeConflictDialog({
         </div>
 
         <div className="bg-muted/40 rounded-md border px-3 py-2 text-[12px] leading-relaxed">
-          <strong>Imponer mi versión</strong> crea un commit de merge que deja el contenido de la rama
-          en main. La versión anterior no se pierde: queda en el historial.
+          {note ?? (
+            <>
+              <strong>Imponer mi versión</strong> crea un commit de merge que deja el contenido de la
+              rama en main. La versión anterior no se pierde: queda en el historial.
+            </>
+          )}
         </div>
 
         <DialogFooter>
@@ -510,7 +572,7 @@ export function MergeConflictDialog({
           </Button>
           <Button variant="destructive" onClick={onForce} disabled={busy}>
             {busy && <Loader2 className="size-4 animate-spin" />}
-            Imponer mi versión
+            {forceLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

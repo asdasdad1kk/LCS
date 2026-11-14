@@ -74,7 +74,8 @@ func branchRef(name string) plumbing.ReferenceName {
 
 // Init creates the local clone and the shared bare repository with an initial
 // commit. Safe to call on an existing repository.
-func Init(bare, local, projectID, projectName, actor string) error {
+func Init(bare, local string, pf ProjectFile, actor string) error {
+	projectName := pf.Name
 	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
 		return err
 	}
@@ -90,7 +91,7 @@ func Init(bare, local, projectID, projectName, actor string) error {
 		return fmt.Errorf("init local: %w", err)
 	}
 
-	sig := &object.Signature{Name: actor, Email: actor + "@lcs.local", When: time.Now()}
+	sig := signatureFor(actor)
 
 	w, err := r.Worktree()
 	if err != nil {
@@ -108,8 +109,7 @@ func Init(bare, local, projectID, projectName, actor string) error {
 			return err
 		}
 		_ = os.WriteFile(filepath.Join(local, "README.md"), []byte(projectReadme(projectName)), 0o644)
-		_ = os.WriteFile(filepath.Join(local, MetaDir, "project.json"),
-			[]byte(fmt.Sprintf("{\n  \"id\": %q,\n  \"name\": %q\n}\n", projectID, projectName)), 0o644)
+		_ = os.WriteFile(filepath.Join(local, MetaDir, "project.json"), pf.Marshal(), 0o644)
 		_ = os.WriteFile(filepath.Join(local, "drawings", ".gitkeep"), []byte(""), 0o644)
 
 		if _, err := w.Add("."); err != nil {
@@ -292,6 +292,8 @@ func (r *Repo) Fetch() error {
 		RemoteName: "origin",
 		RefSpecs:   []config.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
 		Force:      true,
+		// Una rama descartada en otro equipo desaparece también de aquí.
+		Prune: true,
 	})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
@@ -405,6 +407,31 @@ func (r *Repo) SyncBranches() error {
 			continue
 		}
 	}
+
+	// Toda escritura se publica al instante, así que una rama de trabajo local
+	// que ya no existe en la carpeta compartida fue descartada en otro equipo.
+	// Se retira para que no figure como tarea abierta.
+	onRemote := map[string]bool{}
+	for _, p := range pending {
+		onRemote[p.name] = true
+	}
+	head, _ := repo.Head()
+	branches, err := repo.Branches()
+	if err != nil {
+		return err
+	}
+	stale := []plumbing.ReferenceName{}
+	_ = branches.ForEach(func(ref *plumbing.Reference) error {
+		name := ref.Name().Short()
+		if strings.HasPrefix(name, BranchPrefix) && !onRemote[name] && (head == nil || head.Name() != ref.Name()) {
+			stale = append(stale, ref.Name())
+		}
+		return nil
+	})
+	branches.Close()
+	for _, n := range stale {
+		_ = repo.Storer.RemoveReference(n)
+	}
 	return nil
 }
 
@@ -443,7 +470,7 @@ func (r *Repo) commitAll(w *git.Worktree, msg, actor string, extraParents []plum
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	sig := &object.Signature{Name: actor, Email: actor + "@lcs.local", When: time.Now()}
+	sig := signatureFor(actor)
 
 	// Stage everything (including deletions) before committing: go-git only
 	// commits what the index already knows about.
@@ -538,6 +565,7 @@ func (r *Repo) CreateBranch(branch string, meta BranchMeta, actor string) (strin
 	if err := r.Push(branch); err != nil {
 		return "", err
 	}
+	_ = r.ReturnToMain() // ver ReturnToMain: no dejar una rama de trabajo abierta
 	return h.String(), nil
 }
 
@@ -587,6 +615,9 @@ func (r *Repo) WriteFilesAndCommit(branch string, files map[string][]byte, remov
 	}
 	if err := r.Push(branch); err != nil {
 		return nil, "", err
+	}
+	if branch != MainBranch {
+		_ = r.ReturnToMain() // ver ReturnToMain: no dejar una rama de trabajo abierta
 	}
 	return blobs, h.String(), nil
 }
@@ -841,14 +872,15 @@ type LogEntry struct {
 }
 
 type BranchMeta struct {
-	Name       string   `json:"name"`
-	Title      string   `json:"title"`
-	Author     string   `json:"author"`
-	BaseCommit string   `json:"baseCommit"`
-	HeadCommit string   `json:"headCommit"`
-	CreatedAt  int64    `json:"createdAt"`
-	Drawings   []string `json:"drawings"`
-	Notes      string   `json:"notes"`
+	Name        string   `json:"name"`
+	Title       string   `json:"title"`
+	Author      string   `json:"author"`
+	AuthorEmail string   `json:"authorEmail,omitempty"`
+	BaseCommit  string   `json:"baseCommit"`
+	HeadCommit  string   `json:"headCommit"`
+	CreatedAt   int64    `json:"createdAt"`
+	Drawings    []string `json:"drawings"`
+	Notes       string   `json:"notes"`
 }
 
 // Meta reads the task descriptor committed at the tip of a work branch.

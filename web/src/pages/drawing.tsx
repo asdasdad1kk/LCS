@@ -150,7 +150,7 @@ export function DrawingPage() {
           <h1 className="truncate text-[17px] font-semibold tracking-tight">{drawing.name}</h1>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="font-mono text-[10px]">
+          <Badge variant="outline" className="tnum">
             {formatBytes(drawing.size)}
           </Badge>
           <Button variant="outline" size="sm" asChild>
@@ -264,7 +264,7 @@ export function DrawingPage() {
                         : 'border-transparent hover:bg-muted/60'
                     )}
                   >
-                    <span className="text-muted-foreground w-4 shrink-0 text-center font-mono text-[10px]">
+                    <span className="text-muted-foreground tnum w-4 shrink-0 text-center text-[11px]">
                       {i + 1}
                     </span>
                     <FileBox className="text-muted-foreground size-3.5 shrink-0" />

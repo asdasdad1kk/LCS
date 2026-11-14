@@ -86,7 +86,7 @@ export function DashboardPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 px-6 pb-6 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 px-6 pb-7 lg:grid-cols-4">
         <Metric icon={Boxes} label="Proyectos" value={projects.length} />
         <Metric icon={FileBox} label="Planos" value={totals.drawings} />
         <Metric icon={GitBranch} label="Ramas activas" value={totals.open} />
@@ -125,14 +125,14 @@ export function DashboardPage() {
               }
             />
           ) : (
-            <div className="divide-y overflow-hidden rounded-lg border bg-card">
+            <div className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
               {branches.map((b) => (
                 <Link
                   key={b.id}
                   to={`/p/${b.projectId}/t/${b.id}`}
                   className="hover:bg-muted/50 flex items-center gap-3 px-3.5 py-3 transition-colors"
                 >
-                  <div className="grid size-8 shrink-0 place-items-center rounded-md border bg-muted/40 font-mono text-[10px] font-bold">
+                  <div className="bg-primary/10 text-primary grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold">
                     {initials(b.author)}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -140,7 +140,7 @@ export function DashboardPage() {
                       <span className="truncate text-[13px] font-medium">{b.title}</span>
                       <StatusBadge status={b.status} />
                     </div>
-                    <div className="text-muted-foreground mt-0.5 flex items-center gap-2 truncate font-mono text-[11px]">
+                    <div className="text-muted-foreground mt-0.5 flex items-center gap-2 truncate text-[12px]">
                       <span className="truncate">{b.projectName}</span>
                       <span>·</span>
                       <span>{(b.files ?? []).map((f) => fileName(f.path)).join(', ') || '—'}</span>
@@ -164,7 +164,7 @@ export function DashboardPage() {
             >
               Actividad reciente
             </SectionTitle>
-            <div className="divide-y overflow-hidden rounded-lg border bg-card">
+            <div className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
               {events.slice(0, 6).map((e) => (
                 <ActivityRow key={e.id} event={e} />
               ))}
@@ -178,17 +178,39 @@ export function DashboardPage() {
         </section>
 
         <section>
-          <SectionTitle>Proyectos</SectionTitle>
+          <SectionTitle
+            action={
+              <Button variant="ghost" size="xs" asChild>
+                <Link to="/proyectos">
+                  Ver todos <ArrowUpRight className="size-3" />
+                </Link>
+              </Button>
+            }
+          >
+            Proyectos
+          </SectionTitle>
           <div className="grid gap-2.5">
-            {projects.map((p) => (
+            {projects.filter((p) => !p.parentId).map((p) => (
               <Link key={p.id} to={`/p/${p.id}`}>
                 <Card className="hover:border-primary/40 transition-colors">
                   <CardHeader className="pb-2">
                     <CardTitle className="flex items-center justify-between gap-2">
                       <span className="truncate">{p.name}</span>
-                      <Badge variant="outline" className="font-mono text-[10px]">
-                        {p.drawings ?? 0} dwg
-                      </Badge>
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        {!!p.pendingZones && (
+                          <Badge variant="warning" className="tnum">
+                            {p.pendingZones} zona(s) atrasada(s)
+                          </Badge>
+                        )}
+                        {!!p.zones && (
+                          <Badge variant="default" className="tnum">
+                            {p.zones} zonas
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="tnum">
+                          {p.drawings ?? 0} dwg
+                        </Badge>
+                      </span>
                     </CardTitle>
                     {p.description && (
                       <p className="text-muted-foreground line-clamp-2 text-[12px] leading-relaxed">
@@ -197,7 +219,7 @@ export function DashboardPage() {
                     )}
                   </CardHeader>
                   <CardContent className="text-muted-foreground flex items-center gap-3 text-[11px]">
-                    <span className="font-mono">{p.id}</span>
+                    <span className="font-mono text-[11px]">{p.id}</span>
                     <span className="ml-auto">{timeAgo(p.updatedAt)}</span>
                   </CardContent>
                 </Card>
@@ -219,7 +241,7 @@ export function DashboardPage() {
 
           {workspace && (
             <div className="text-muted-foreground mt-6 rounded-lg border border-dashed px-3.5 py-3">
-              <div className="mb-1 text-[10px] font-semibold tracking-[0.14em] uppercase">
+              <div className="mb-1 text-[11px] font-medium tracking-[0.06em] uppercase">
                 Workspace
               </div>
               <div className="break-all font-mono text-[11px]">{workspace}</div>
@@ -249,14 +271,14 @@ function Metric({
   tone?: 'warning'
 }) {
   return (
-    <div className="rounded-lg border bg-card px-4 py-3">
-      <div className="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
+    <div className="rounded-lg border bg-card px-4 py-3.5 shadow-xs">
+      <div className="text-muted-foreground flex items-center gap-2 text-[12.5px] font-medium">
         <Icon className="size-3.5" />
         {label}
       </div>
       <div
         className={
-          'mt-1.5 text-2xl font-semibold tnum tracking-tight ' +
+          'mt-2 text-[26px] leading-none font-semibold tnum tracking-tight ' +
           (tone === 'warning' && value > 0 ? 'text-warning' : '')
         }
       >
@@ -272,7 +294,14 @@ const eventLabels: Record<string, string> = {
   'branch.created': 'abrió una tarea',
   'branch.uploaded': 'subió cambios',
   'branch.merged': 'integró una tarea',
-  'branch.closed': 'descartó una tarea'
+  'branch.closed': 'descartó una tarea',
+  'drawing.restored': 'restauró un plano',
+  'subproject.created': 'creó el subproyecto',
+  'subproject.integrated': 'actualizó el master con la zona',
+  'branch.approved': 'aprobó una tarea',
+  'branch.rejected': 'rechazó una tarea',
+  'project.approvers': 'actualizó los aprobadores',
+  'project.discovered': 'encontró el proyecto en la carpeta compartida'
 }
 
 export function ActivityRow({ event }: { event: ActivityEvent }) {
@@ -283,10 +312,15 @@ export function ActivityRow({ event }: { event: ActivityEvent }) {
     /* ignore */
   }
   const detail =
-    payload.title ?? payload.branch ?? payload.name ?? (payload.count ? `${payload.count} archivos` : '')
+    payload.title ??
+    payload.branch ??
+    payload.zone ??
+    payload.name ??
+    payload.drawing ??
+    (payload.count ? `${payload.count} archivos` : '')
   return (
     <div className="flex items-start gap-3 px-3.5 py-2.5">
-      <div className="mt-1 size-1.5 shrink-0 rounded-full bg-primary/60" />
+      <div className="mt-[7px] size-1.5 shrink-0 rounded-full bg-primary/70" />
       <div className="min-w-0 flex-1">
         <p className="text-[13px] leading-snug">
           <span className="font-medium">{event.actor}</span>{' '}
@@ -295,7 +329,7 @@ export function ActivityRow({ event }: { event: ActivityEvent }) {
           </span>
           {detail && <span className="text-foreground font-medium"> · {detail}</span>}
         </p>
-        <p className="text-muted-foreground mt-0.5 font-mono text-[10px]">
+        <p className="text-muted-foreground tnum mt-0.5 text-[11.5px]">
           {timeAgo(event.createdAt)}
           {payload.size ? ` · ${formatBytes(payload.size)}` : ''}
         </p>

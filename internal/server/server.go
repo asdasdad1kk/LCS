@@ -46,7 +46,7 @@ func New(cfg *config.Config, st *store.Store) (*Server, error) {
 		ready: make(chan struct{}),
 	}
 	s.http = &http.Server{
-		Handler:           s.logged(mux),
+		Handler:           cors(s.logged(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -91,5 +91,26 @@ func (s *Server) logged(next http.Handler) http.Handler {
 			return
 		}
 		slog.Debug("http", "method", r.Method, "path", r.URL.Path, "dur", time.Since(start).String())
+	})
+}
+
+// cors permite que la ventana nativa (origen wails.localhost) suba archivos
+// directo al puerto local: el servidor de assets de Wails no entrega bien los
+// cuerpos multipart grandes. Solo se aceptan los orígenes de la propia ventana.
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch o := r.Header.Get("Origin"); o {
+		case "http://wails.localhost", "wails://wails", "https://wails.localhost":
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", o)
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Content-Type")
+			h.Set("Vary", "Origin")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
 	})
 }

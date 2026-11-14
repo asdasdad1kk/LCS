@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,11 +11,15 @@ import {
   GitBranch,
   GitMerge,
   Loader2,
+  PencilLine,
+  ShieldCheck,
   Trash2,
   Upload
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, ApiError, type Branch } from '@/lib/api'
+import { api, ApiError, type Branch, type ReviewView } from '@/lib/api'
+import { ApprovalActions, ApprovalChain } from '@/components/approval-chain'
+import { BranchTimeline } from '@/components/branch-timeline'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/separator'
@@ -36,7 +40,11 @@ import { cn } from '@/lib/utils'
 
 export function TaskPage() {
   const { projectId = '', taskId = '' } = useParams()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const shell = useOutletContext<{ reloadProjects?: () => void } | null>()
   const [branch, setBranch] = useState<Branch | null>(null)
+  const [review, setReview] = useState<ReviewView | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [merging, setMerging] = useState(false)
@@ -44,6 +52,14 @@ export function TaskPage() {
   const [closing, setClosing] = useState(false)
   const [closingBusy, setClosingBusy] = useState(false)
   const [drawingIds, setDrawingIds] = useState<Record<string, string>>({})
+
+  const loadReview = useCallback(async () => {
+    try {
+      setReview(await api.review(taskId))
+    } catch {
+      /* las aprobaciones son secundarias: la tarea se ve igual */
+    }
+  }, [taskId])
 
   const load = useCallback(async () => {
     try {
@@ -53,11 +69,37 @@ export function TaskPage() {
     } finally {
       setLoading(false)
     }
-  }, [taskId])
+    await loadReview()
+  }, [taskId, loadReview])
 
   useEffect(() => {
     load()
   }, [load])
+
+  // Otras personas aprueban desde sus equipos: mantener el estado al día.
+  useEffect(() => {
+    const timer = window.setInterval(loadReview, 20000)
+    window.addEventListener('focus', loadReview)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', loadReview)
+    }
+  }, [loadReview])
+
+  const decide = async (kind: 'approve' | 'reject', comment: string) => {
+    try {
+      const next = kind === 'approve' ? await api.approve(taskId, comment) : await api.reject(taskId, comment)
+      setReview(next)
+      shell?.reloadProjects?.()
+      toast.success(kind === 'approve' ? 'Aprobaste esta versión' : 'Rechazaste esta versión', {
+        description:
+          kind === 'approve' && next.complete ? 'Ya la aprobaron todos: se puede integrar.' : undefined
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'no pude registrar tu decisión')
+      await loadReview()
+    }
+  }
 
   useEffect(() => {
     if (!projectId) return
@@ -73,12 +115,17 @@ export function TaskPage() {
   const hasChanges = files.some((f) => f.changed)
   const isDone = branch?.status === 'merged' || branch?.status === 'closed'
 
+  // Con aprobadores, el flujo tiene un paso más: Aprobar va antes de Integrar.
+  const needsApproval = !!review?.required
+  const blocked = needsApproval && !review?.complete // no se puede integrar todavía
+
   const step = useMemo(() => {
-    if (branch?.status === 'merged') return 4
-    if (branch?.status === 'review') return 4
+    const last = needsApproval ? 5 : 4
+    if (branch?.status === 'merged') return last + 1
+    if (branch?.status === 'review') return needsApproval && blocked ? 4 : last
     if (hasChanges) return 3
     return 2
-  }, [branch, hasChanges])
+  }, [branch, hasChanges, needsApproval, blocked])
 
   const doMerge = async (strategy?: string) => {
     setMerging(true)
@@ -89,8 +136,26 @@ export function TaskPage() {
       })
       setConflict(null)
       await load()
+      shell?.reloadProjects?.()
+      // Una zona que cambió deja al master atrasado: avisar en el momento.
+      try {
+        const detail = await api.project(projectId)
+        if (detail.parent && detail.integration && detail.integration.changed.length + detail.integration.removed.length > 0) {
+          toast.warning(`Hay que actualizar el master «${detail.parent.name}»`, {
+            description: 'La zona cambió y el master todavía no tiene esta versión.',
+            duration: 12000,
+            action: { label: 'Ir a actualizar', onClick: () => navigate(`/p/${projectId}`) }
+          })
+        }
+      } catch {
+        /* el aviso es secundario */
+      }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (err instanceof ApiError && err.status === 409 && err.payload?.needsApproval) {
+        // Alguien subió un plano nuevo o cambió la cadena desde que se abrió la pantalla.
+        toast.error(err.message)
+        await loadReview()
+      } else if (err instanceof ApiError && err.status === 409) {
         setConflict(err.payload?.paths ?? [])
       } else {
         toast.error(err instanceof Error ? err.message : 'no pude integrar la tarea')
@@ -156,8 +221,9 @@ export function TaskPage() {
               </Button>
               <Button
                 size="sm"
-                variant={hasChanges ? 'default' : 'secondary'}
-                disabled={merging || !hasChanges}
+                variant={hasChanges && !blocked ? 'default' : 'secondary'}
+                disabled={merging || !hasChanges || blocked}
+                title={blocked ? 'Faltan aprobaciones: mira la cadena de aprobación' : undefined}
                 onClick={() => doMerge()}
               >
                 {merging ? <Loader2 className="size-4 animate-spin" /> : <GitMerge className="size-4" />}
@@ -178,16 +244,67 @@ export function TaskPage() {
       </div>
 
       <div className="px-6 py-4">
-        <Workflow branch={branch} step={step} />
+        <Workflow branch={branch} step={step} withApproval={needsApproval} />
       </div>
+
+      {review && review.overlaps.length > 0 && !isDone && (
+        <div className="px-6 pb-4">
+          <div className="border-warning/40 bg-warning/10 rounded-lg border px-4 py-3 text-[12.5px] leading-relaxed">
+            <div className="mb-1 flex items-center gap-1.5 font-semibold">
+              <PencilLine className="text-warning size-4" /> Otra tarea edita los mismos planos
+            </div>
+            <ul className="text-muted-foreground space-y-0.5">
+              {review.overlaps.map((o) => (
+                <li key={o.branchId}>
+                  <Link to={`/p/${projectId}/t/${o.branchId}`} className="text-foreground font-medium hover:underline">
+                    {o.title}
+                  </Link>{' '}
+                  · {o.author} · {o.paths.map((p) => fileName(p)).join(', ')}
+                </li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground mt-1">
+              Dos ediciones del mismo DWG no se pueden fusionar: la que se integre después reemplaza a la
+              otra.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {review && (needsApproval || review.nodes.length > 0) ? (
+        <div className="px-6 pb-4">
+          <ApprovalCard
+            review={review}
+            isDone={isDone}
+            merging={merging}
+            hasChanges={hasChanges}
+            onMerge={() => doMerge()}
+            onApprove={(c) => decide('approve', c)}
+            onReject={(c) => decide('reject', c)}
+          />
+        </div>
+      ) : (
+        review &&
+        !isDone && (
+          <div className="px-6 pb-4">
+            <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed px-4 py-2.5 text-[12.5px]">
+              <ShieldCheck className="size-4" />
+              Este proyecto no tiene aprobadores: la tarea se integra sin revisión.
+              <Link to={`/p/${projectId}?tab=approvers`} className="text-primary font-medium hover:underline">
+                Definir quién aprueba →
+              </Link>
+            </div>
+          </div>
+        )
+      )}
 
       <div className="grid gap-5 px-6 pb-10 lg:grid-cols-[1.5fr_1fr]">
         <section>
-          <Tabs defaultValue="files">
+          <Tabs defaultValue={searchParams.get('tab') ?? 'files'}>
             <TabsList>
               <TabsTrigger value="files">Archivos · {files.length}</TabsTrigger>
               <TabsTrigger value="preview">Vista previa</TabsTrigger>
-              <TabsTrigger value="history">Historial</TabsTrigger>
+              <TabsTrigger value="history">Línea de tiempo</TabsTrigger>
             </TabsList>
 
             <TabsContent value="files" className="mt-3">
@@ -202,10 +319,10 @@ export function TaskPage() {
                       <div className="text-muted-foreground truncate font-mono text-[10px]">{f.path}</div>
                     </div>
                     <div className="text-right text-[11px]">
-                      <Badge variant={f.changed ? 'success' : 'muted'} className="font-mono text-[10px]">
+                      <Badge variant={f.changed ? 'success' : 'muted'}>
                         {f.changed ? 'subido' : 'sin cambios'}
                       </Badge>
-                      <div className="text-muted-foreground mt-1 font-mono text-[10px]">
+                      <div className="text-muted-foreground tnum mt-1 text-[11.5px]">
                         {formatBytes(f.sizeBytes || 0)}
                       </div>
                     </div>
@@ -262,29 +379,11 @@ export function TaskPage() {
             </TabsContent>
 
             <TabsContent value="history" className="mt-3">
-              <div className="overflow-hidden rounded-lg border bg-card">
-                {(branch.revisions ?? []).map((r) => (
-                  <div key={r.id} className="flex items-start gap-3 border-b px-3.5 py-2.5 last:border-b-0">
-                    <span className="bg-muted text-muted-foreground mt-0.5 grid size-5 shrink-0 place-items-center rounded-full font-mono text-[8px] font-bold">
-                      {initials(r.author)}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[12.5px] leading-snug">{r.message.replace(/^LCS:\s*/, '')}</p>
-                      <p className="text-muted-foreground mt-0.5 font-mono text-[10px]">
-                        {shortSha(r.commitSha)} · {r.author} · {timeAgo(r.createdAt)}
-                      </p>
-                    </div>
-                    <span className="text-muted-foreground shrink-0 font-mono text-[10px]">
-                      {formatBytes(r.size)}
-                    </span>
-                  </div>
-                ))}
-                {(branch.revisions ?? []).length === 0 && (
-                  <div className="text-muted-foreground px-4 py-6 text-center text-[13px]">
-                    Sin commits en esta rama.
-                  </div>
-                )}
-              </div>
+              {review ? (
+                <BranchTimeline items={review.timeline} />
+              ) : (
+                <Skeleton className="h-40 w-full" />
+              )}
             </TabsContent>
           </Tabs>
         </section>
@@ -390,16 +489,109 @@ export function TaskPage() {
   )
 }
 
-function Workflow({ branch, step }: { branch: Branch; step: number }) {
+/** El nodo de aprobación: la cadena en orden y, al final, el nodo de integrar. */
+function ApprovalCard({
+  review,
+  isDone,
+  merging,
+  hasChanges,
+  onMerge,
+  onApprove,
+  onReject
+}: {
+  review: ReviewView
+  isDone: boolean
+  merging: boolean
+  hasChanges: boolean
+  onMerge: () => void
+  onApprove: (comment: string) => Promise<void>
+  onReject: (comment: string) => Promise<void>
+}) {
+  const approved = review.nodes.filter((n) => n.status === 'approved').length
+  const rejected = review.nodes.some((n) => n.status === 'rejected')
+  const total = review.nodes.length
+  const summary = review.complete
+    ? { text: 'Aprobada por todos', variant: 'success' as const }
+    : rejected
+      ? { text: 'Rechazada', variant: 'destructive' as const }
+      : { text: `${approved} de ${total} aprobaron`, variant: 'warning' as const }
+
+  return (
+    <div className="bg-card rounded-lg border shadow-xs">
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+        <ShieldCheck className="text-muted-foreground size-4" />
+        <h2 className="text-[13.5px] font-semibold">Aprobación</h2>
+        <Badge variant={summary.variant}>{summary.text}</Badge>
+        <span className="text-muted-foreground ml-auto text-[12px]">
+          Cada nodo decide después del anterior. Una versión nueva reinicia la cadena.
+        </span>
+      </div>
+
+      <div className="grid gap-x-8 gap-y-4 px-4 py-4 md:grid-cols-[1fr_1fr]">
+        <div>
+          <ApprovalChain nodes={review.nodes} />
+        </div>
+        <div className="flex flex-col">
+          {!hasChanges && !isDone && (
+            <p className="text-muted-foreground bg-muted/50 rounded-md px-3 py-2 text-[12.5px]">
+              Todavía no hay cambios subidos: no hay nada que aprobar.
+            </p>
+          )}
+          <ApprovalActions review={review} onApprove={onApprove} onReject={onReject} />
+
+          {/* Último nodo de la cadena: integrar a main. */}
+          <div
+            className={cn(
+              'mt-auto flex items-center gap-3 rounded-lg border px-3 py-2.5',
+              review.complete && !isDone ? 'border-success/50 bg-success/5' : 'bg-muted/30'
+            )}
+          >
+            <span
+              className={cn(
+                'grid size-7 shrink-0 place-items-center rounded-full',
+                isDone || review.complete ? 'bg-success text-white' : 'bg-muted text-muted-foreground'
+              )}
+            >
+              <GitMerge className="size-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">Integrar a main</div>
+              <div className="text-muted-foreground text-[11.5px]">
+                {isDone
+                  ? 'Ya integrada.'
+                  : review.complete
+                    ? 'Todos aprobaron esta versión.'
+                    : 'Se habilita cuando todos aprueben.'}
+              </div>
+            </div>
+            {!isDone && (
+              <Button size="sm" disabled={merging || !hasChanges || !review.complete} onClick={onMerge}>
+                {merging ? <Loader2 className="size-4 animate-spin" /> : <GitMerge className="size-4" />}
+                Integrar
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Workflow({ branch, step, withApproval }: { branch: Branch; step: number; withApproval: boolean }) {
   const steps = [
     { n: 1, label: 'Descargar', hint: 'ZIP con los DWG de la rama' },
     { n: 2, label: 'Editar', hint: 'AutoCAD · mismos nombres' },
     { n: 3, label: 'Subir', hint: 'commit en la rama' },
-    { n: 4, label: 'Integrar', hint: 'merge a main' }
+    ...(withApproval
+      ? [
+          { n: 4, label: 'Aprobar', hint: 'todos los nodos, en orden' },
+          { n: 5, label: 'Integrar', hint: 'merge a main' }
+        ]
+      : [{ n: 4, label: 'Integrar', hint: 'merge a main' }])
   ]
   const done = branch.status === 'merged'
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+    <div className={cn('grid grid-cols-2 gap-2', withApproval ? 'md:grid-cols-5' : 'md:grid-cols-4')}>
       {steps.map((s) => {
         const isDone = done || s.n < step
         const isCurrent = !done && s.n === step

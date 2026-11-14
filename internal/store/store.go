@@ -19,6 +19,18 @@ type Project struct {
 	Description string `json:"description"`
 	CreatedAt   int64  `json:"createdAt"`
 	UpdatedAt   int64  `json:"updatedAt"`
+
+	// ParentID is the master project this one is a zone of ("" for top-level).
+	ParentID string `json:"parentId"`
+	// IntegratedCommit is the zone's main commit that was last copied into the
+	// master; IntegratedMasterCommit is the master's main right after that copy.
+	// Both are "" until the first integration.
+	IntegratedCommit       string `json:"-"`
+	IntegratedMasterCommit string `json:"-"`
+	IntegratedAt           int64  `json:"integratedAt"`
+
+	// Owner is the e-mail of whoever created the project.
+	Owner string `json:"owner"`
 }
 
 type Drawing struct {
@@ -46,6 +58,31 @@ type Branch struct {
 	CreatedAt  int64  `json:"createdAt"`
 	UpdatedAt  int64  `json:"updatedAt"`
 	MergedAt   int64  `json:"mergedAt"`
+
+	AuthorEmail string `json:"authorEmail"`
+	// TreeHash identifies the content of drawings/ at the branch tip; an
+	// approval is only valid while it matches.
+	TreeHash string `json:"-"`
+}
+
+// Approver is one node of a project's approval chain (position = order).
+type Approver struct {
+	Position int    `json:"position"`
+	Email    string `json:"email"`
+	Label    string `json:"label"`
+}
+
+// Approval is a decision recorded on a branch (mirror of .lcs/approvals/*.json).
+type Approval struct {
+	ID       string `json:"id"`
+	BranchID string `json:"branchId"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Decision string `json:"decision"` // approved | rejected
+	Comment  string `json:"comment"`
+	Tree     string `json:"tree"`
+	Commit   string `json:"commit"`
+	At       int64  `json:"at"`
 }
 
 type BranchFile struct {
@@ -149,6 +186,27 @@ CREATE TABLE IF NOT EXISTS events (
 	created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS project_approvers (
+	project_id TEXT NOT NULL,
+	position   INTEGER NOT NULL,
+	email      TEXT NOT NULL,
+	label      TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (project_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS approvals (
+	id         TEXT NOT NULL,
+	branch_id  TEXT NOT NULL,
+	email      TEXT NOT NULL,
+	name       TEXT NOT NULL DEFAULT '',
+	decision   TEXT NOT NULL,
+	comment    TEXT NOT NULL DEFAULT '',
+	tree       TEXT NOT NULL DEFAULT '',
+	commit_sha TEXT NOT NULL DEFAULT '',
+	at         INTEGER NOT NULL,
+	PRIMARY KEY (branch_id, id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_drawings_project ON drawings(project_id);
 CREATE INDEX IF NOT EXISTS idx_branches_project ON branches(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_revisions_drawing ON revisions(project_id, drawing_path);
@@ -168,6 +226,14 @@ func Open(path string) (*Store, error) {
 	// Forward-compatible tweaks for databases created by earlier builds.
 	for _, stmt := range []string{
 		`ALTER TABLE branch_files ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE projects ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN integrated_commit TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN integrated_master_commit TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN integrated_at INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id)`,
+		`ALTER TABLE projects ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE branches ADD COLUMN author_email TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE branches ADD COLUMN tree_hash TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(stmt)
 	}
@@ -180,38 +246,74 @@ func now() int64 { return time.Now().UnixMilli() }
 
 // ---------------------------------------------------------------- projects
 
+const projectCols = `id,name,description,created_at,updated_at,parent_id,integrated_commit,integrated_master_commit,integrated_at,owner`
+
+func scanProject(sc interface{ Scan(...any) error }) (*Project, error) {
+	var p Project
+	err := sc.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt,
+		&p.ParentID, &p.IntegratedCommit, &p.IntegratedMasterCommit, &p.IntegratedAt, &p.Owner)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 func (s *Store) CreateProject(p *Project) error {
 	p.CreatedAt, p.UpdatedAt = now(), now()
-	_, err := s.db.Exec(`INSERT INTO projects(id,name,description,created_at,updated_at) VALUES(?,?,?,?,?)`,
-		p.ID, p.Name, p.Description, p.CreatedAt, p.UpdatedAt)
+	_, err := s.db.Exec(`INSERT INTO projects(id,name,description,created_at,updated_at,parent_id,owner) VALUES(?,?,?,?,?,?,?)`,
+		p.ID, p.Name, p.Description, p.CreatedAt, p.UpdatedAt, p.ParentID, p.Owner)
 	return err
 }
 
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.db.Query(`SELECT id,name,description,created_at,updated_at FROM projects ORDER BY name`)
+	rows, err := s.db.Query(`SELECT ` + projectCols + ` FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Project{}
 	for rows.Next() {
-		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// ListChildren returns the zones of a master project.
+func (s *Store) ListChildren(parentID string) ([]Project, error) {
+	rows, err := s.db.Query(`SELECT `+projectCols+` FROM projects WHERE parent_id=? ORDER BY name`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Project{}
+	for rows.Next() {
+		p, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) GetProject(id string) (*Project, error) {
-	var p Project
-	err := s.db.QueryRow(`SELECT id,name,description,created_at,updated_at FROM projects WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt)
+	p, err := scanProject(s.db.QueryRow(`SELECT `+projectCols+` FROM projects WHERE id=?`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &p, err
+	return p, err
+}
+
+// SetIntegration records that the zone's main at zoneCommit was copied into the
+// master, whose main is now masterCommit.
+func (s *Store) SetIntegration(id, zoneCommit, masterCommit string) error {
+	_, err := s.db.Exec(`UPDATE projects SET integrated_commit=?, integrated_master_commit=?, integrated_at=? WHERE id=?`,
+		zoneCommit, masterCommit, now(), id)
+	return err
 }
 
 func (s *Store) TouchProject(id string) error {
@@ -271,6 +373,11 @@ func (s *Store) GetDrawingByPath(projectID, path string) (*Drawing, error) {
 	return &d, err
 }
 
+func (s *Store) DeleteDrawing(id string) error {
+	_, err := s.db.Exec(`DELETE FROM drawings WHERE id=?`, id)
+	return err
+}
+
 func (s *Store) SetDrawingLayouts(id, layoutsJSON, metaJSON string) error {
 	_, err := s.db.Exec(`UPDATE drawings SET layouts_json=?, meta_json=?, updated_at=? WHERE id=?`,
 		layoutsJSON, metaJSON, now(), id)
@@ -280,26 +387,30 @@ func (s *Store) SetDrawingLayouts(id, layoutsJSON, metaJSON string) error {
 // ---------------------------------------------------------------- branches
 
 func (s *Store) CreateBranch(b *Branch) error {
-	b.CreatedAt, b.UpdatedAt = now(), now()
-	_, err := s.db.Exec(`INSERT INTO branches(id,project_id,name,title,author,status,base_commit,head_commit,created_at,updated_at,merged_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		b.ID, b.ProjectID, b.Name, b.Title, b.Author, b.Status, b.BaseCommit, b.HeadCommit, b.CreatedAt, b.UpdatedAt, b.MergedAt)
+	// Una tarea descubierta desde otro equipo conserva su fecha real de apertura.
+	if b.CreatedAt == 0 {
+		b.CreatedAt = now()
+	}
+	b.UpdatedAt = now()
+	_, err := s.db.Exec(`INSERT INTO branches(id,project_id,name,title,author,status,base_commit,head_commit,created_at,updated_at,merged_at,author_email,tree_hash)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		b.ID, b.ProjectID, b.Name, b.Title, b.Author, b.Status, b.BaseCommit, b.HeadCommit, b.CreatedAt, b.UpdatedAt, b.MergedAt, b.AuthorEmail, b.TreeHash)
 	return err
 }
 
 func (s *Store) UpdateBranch(b *Branch) error {
 	b.UpdatedAt = now()
-	_, err := s.db.Exec(`UPDATE branches SET title=?,author=?,status=?,base_commit=?,head_commit=?,updated_at=?,merged_at=? WHERE id=?`,
-		b.Title, b.Author, b.Status, b.BaseCommit, b.HeadCommit, b.UpdatedAt, b.MergedAt, b.ID)
+	_, err := s.db.Exec(`UPDATE branches SET title=?,author=?,status=?,base_commit=?,head_commit=?,updated_at=?,merged_at=?,author_email=?,tree_hash=? WHERE id=?`,
+		b.Title, b.Author, b.Status, b.BaseCommit, b.HeadCommit, b.UpdatedAt, b.MergedAt, b.AuthorEmail, b.TreeHash, b.ID)
 	return err
 }
 
-const branchCols = `id,project_id,name,title,author,status,base_commit,head_commit,created_at,updated_at,merged_at`
+const branchCols = `id,project_id,name,title,author,status,base_commit,head_commit,created_at,updated_at,merged_at,author_email,tree_hash`
 
 func scanBranch(sc interface{ Scan(...any) error }) (*Branch, error) {
 	var b Branch
 	if err := sc.Scan(&b.ID, &b.ProjectID, &b.Name, &b.Title, &b.Author, &b.Status,
-		&b.BaseCommit, &b.HeadCommit, &b.CreatedAt, &b.UpdatedAt, &b.MergedAt); err != nil {
+		&b.BaseCommit, &b.HeadCommit, &b.CreatedAt, &b.UpdatedAt, &b.MergedAt, &b.AuthorEmail, &b.TreeHash); err != nil {
 		return nil, err
 	}
 	b.Ref = "refs/heads/" + b.Name
@@ -469,7 +580,7 @@ func (s *Store) ListEvents(projectID string, limit int) ([]Event, error) {
 // ListAllBranches returns branches across every project, with the project name.
 func (s *Store) ListAllBranches(status string) ([]BranchRow, error) {
 	q := `SELECT b.id,b.project_id,b.name,b.title,b.author,b.status,b.base_commit,b.head_commit,
-	             b.created_at,b.updated_at,b.merged_at,p.name
+	             b.created_at,b.updated_at,b.merged_at,b.author_email,b.tree_hash,p.name
 	      FROM branches b JOIN projects p ON p.id = b.project_id`
 	args := []any{}
 	if status != "" && status != "all" {
@@ -490,7 +601,7 @@ func (s *Store) ListAllBranches(status string) ([]BranchRow, error) {
 	for rows.Next() {
 		var b BranchRow
 		if err := rows.Scan(&b.ID, &b.ProjectID, &b.Name, &b.Title, &b.Author, &b.Status,
-			&b.BaseCommit, &b.HeadCommit, &b.CreatedAt, &b.UpdatedAt, &b.MergedAt, &b.ProjectName); err != nil {
+			&b.BaseCommit, &b.HeadCommit, &b.CreatedAt, &b.UpdatedAt, &b.MergedAt, &b.AuthorEmail, &b.TreeHash, &b.ProjectName); err != nil {
 			return nil, err
 		}
 		b.Ref = "refs/heads/" + b.Name
@@ -503,4 +614,87 @@ func (s *Store) ListAllBranches(status string) ([]BranchRow, error) {
 type BranchRow struct {
 	Branch
 	ProjectName string `json:"projectName"`
+}
+
+// ---------------------------------------------------------------- approvals
+
+// SetProjectOwner records who created the project.
+func (s *Store) SetProjectOwner(id, owner string) error {
+	_, err := s.db.Exec(`UPDATE projects SET owner=? WHERE id=?`, owner, id)
+	return err
+}
+
+// ReplaceApprovers stores the project's approval chain, in order.
+func (s *Store) ReplaceApprovers(projectID string, chain []Approver) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM project_approvers WHERE project_id=?`, projectID); err != nil {
+		return err
+	}
+	for i, a := range chain {
+		if _, err := tx.Exec(`INSERT INTO project_approvers(project_id,position,email,label) VALUES(?,?,?,?)`,
+			projectID, i, a.Email, a.Label); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ListApprovers(projectID string) ([]Approver, error) {
+	rows, err := s.db.Query(`SELECT position,email,label FROM project_approvers WHERE project_id=? ORDER BY position`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Approver{}
+	for rows.Next() {
+		var a Approver
+		if err := rows.Scan(&a.Position, &a.Email, &a.Label); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ReplaceApprovals stores every decision recorded on a branch.
+func (s *Store) ReplaceApprovals(branchID string, list []Approval) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM approvals WHERE branch_id=?`, branchID); err != nil {
+		return err
+	}
+	for _, a := range list {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO approvals(id,branch_id,email,name,decision,comment,tree,commit_sha,at)
+			VALUES(?,?,?,?,?,?,?,?,?)`,
+			a.ID, branchID, a.Email, a.Name, a.Decision, a.Comment, a.Tree, a.Commit, a.At); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListApprovals returns a branch's decisions, oldest first.
+func (s *Store) ListApprovals(branchID string) ([]Approval, error) {
+	rows, err := s.db.Query(`SELECT id,branch_id,email,name,decision,comment,tree,commit_sha,at
+		FROM approvals WHERE branch_id=? ORDER BY at, id`, branchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Approval{}
+	for rows.Next() {
+		var a Approval
+		if err := rows.Scan(&a.ID, &a.BranchID, &a.Email, &a.Name, &a.Decision, &a.Comment, &a.Tree, &a.Commit, &a.At); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

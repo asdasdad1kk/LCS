@@ -44,6 +44,9 @@ try {
   Pop-Location
 
   Write-Host '[2/3] go build' -ForegroundColor Cyan
+  # Icono del .exe, manifiesto e info de version (cmd/lcs/*.syso) desde build/appicon.png.
+  & $goCommand run ./tools/appicon
+  if ($LASTEXITCODE -ne 0) { throw "tools/appicon fallo con codigo $LASTEXITCODE" }
   $env:CGO_ENABLED = '1'
   & $goCommand build -tags "desktop,production" -trimpath -ldflags="-s -w -H windowsgui" -o LCS.exe ./cmd/lcs
   if ($LASTEXITCODE -ne 0) { throw "go build fallo con codigo $LASTEXITCODE" }

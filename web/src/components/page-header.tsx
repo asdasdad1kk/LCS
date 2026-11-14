@@ -15,16 +15,16 @@ export function PageHeader({
   className?: string
 }) {
   return (
-    <div className={cn('flex flex-wrap items-start justify-between gap-4 px-6 pt-5 pb-4', className)}>
+    <div className={cn('flex flex-wrap items-start justify-between gap-4 px-6 pt-6 pb-5', className)}>
       <div className="min-w-0">
         {eyebrow && (
-          <div className="text-muted-foreground mb-1.5 flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
+          <div className="text-muted-foreground mb-2 flex items-center gap-1.5 text-[11px] font-medium tracking-[0.06em] uppercase">
             {eyebrow}
           </div>
         )}
-        <h1 className="truncate text-[19px] leading-tight font-semibold tracking-tight">{title}</h1>
+        <h1 className="truncate text-[21px] leading-tight font-semibold tracking-tight">{title}</h1>
         {description && (
-          <p className="text-muted-foreground mt-1 max-w-2xl text-[13px] leading-relaxed">
+          <p className="text-muted-foreground mt-1.5 max-w-2xl text-[13.5px] leading-relaxed">
             {description}
           </p>
         )}
@@ -42,8 +42,8 @@ export function SectionTitle({
   action?: ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between px-1 pb-2">
-      <h2 className="text-[11px] font-semibold tracking-[0.14em] uppercase text-muted-foreground">
+    <div className="flex h-8 items-center justify-between px-0.5 pb-2">
+      <h2 className="text-[13.5px] font-semibold tracking-tight">
         {children}
       </h2>
       {action}
@@ -63,8 +63,12 @@ export function EmptyState({
   action?: ReactNode
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center">
-      {Icon && <Icon className="text-muted-foreground/60 mb-1 size-6" />}
+    <div className="bg-card/60 flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-14 text-center">
+      {Icon && (
+        <span className="bg-muted text-muted-foreground mb-2 grid size-10 place-items-center rounded-full">
+          <Icon className="size-5" />
+        </span>
+      )}
       <p className="text-sm font-medium">{title}</p>
       {description && (
         <p className="text-muted-foreground max-w-sm text-[13px] leading-relaxed">{description}</p>

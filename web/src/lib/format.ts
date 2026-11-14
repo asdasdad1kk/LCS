@@ -47,3 +47,7 @@ export function initials(name: string): string {
     .map((p) => p[0]?.toUpperCase())
     .join('')
 }
+
+export function planos(n: number): string {
+  return `${n} ${n === 1 ? 'plano' : 'planos'}`
+}

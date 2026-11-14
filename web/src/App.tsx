@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/app-shell'
 import { DashboardPage } from '@/pages/dashboard'
 import { ProjectPage } from '@/pages/project'
+import { ProjectsPage } from '@/pages/projects'
+import { ApprovalsPage } from '@/pages/approvals'
 import { DrawingPage } from '@/pages/drawing'
 import { TaskPage } from '@/pages/task'
 import { TasksPage } from '@/pages/tasks'
@@ -12,7 +14,9 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
+        <Route path="proyectos" element={<ProjectsPage />} />
         <Route path="tareas" element={<TasksPage />} />
+        <Route path="aprobaciones" element={<ApprovalsPage />} />
         <Route path="actividad" element={<ActivityPage />} />
         <Route path="p/:projectId" element={<ProjectPage />} />
         <Route path="p/:projectId/d/:drawingId" element={<DrawingPage />} />

@@ -14,10 +14,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"lcs/internal/config"
+	"lcs/internal/identity"
 	"lcs/internal/store"
 	"lcs/internal/vcs"
 )
@@ -25,6 +27,12 @@ import (
 type Service struct {
 	cfg *config.Config
 	st  *store.Store
+
+	// Cuándo se trajo por última vez lo de la carpeta compartida (ver
+	// RefreshAllReviews y MaybeDiscover).
+	refreshMu    sync.Mutex
+	refreshedAt  time.Time
+	discoveredAt time.Time
 }
 
 func New(cfg *config.Config, st *store.Store) *Service {
@@ -49,6 +57,8 @@ func (s *Service) repo(projectID string) *vcs.Repo {
 type CreateProjectInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	// ParentID makes the new project a zone (subproject) of that master.
+	ParentID string `json:"parentId"`
 }
 
 func (s *Service) CreateProject(in CreateProjectInput) (*store.Project, error) {
@@ -56,20 +66,40 @@ func (s *Service) CreateProject(in CreateProjectInput) (*store.Project, error) {
 	if name == "" {
 		return nil, errors.New("el nombre del proyecto es obligatorio")
 	}
+	parentID := strings.TrimSpace(in.ParentID)
+	if parentID != "" {
+		parent, err := s.st.GetProject(parentID)
+		if err != nil {
+			return nil, err
+		}
+		if parent == nil {
+			return nil, errors.New("el proyecto master no existe")
+		}
+		if parent.ParentID != "" {
+			return nil, errors.New("un subproyecto no puede tener subproyectos: elegí el master")
+		}
+	}
 	id := s.uniqueID(name)
 	repo := s.repo(id)
 
 	if err := repo.WithLock(func() error {
-		return vcs.Init(repo.Bare, repo.Local, id, name, s.cfg.Actor)
+		return vcs.Init(repo.Bare, repo.Local, vcs.ProjectFile{
+			ID: id, Name: name, Description: in.Description, Parent: parentID,
+			Owner: identity.Normalize(s.cfg.Email),
+		}, s.cfg.Actor)
 	}); err != nil {
 		return nil, fmt.Errorf("creando repositorio: %w", err)
 	}
 
-	p := &store.Project{ID: id, Name: name, Description: in.Description}
+	p := &store.Project{ID: id, Name: name, Description: in.Description, ParentID: parentID,
+		Owner: identity.Normalize(s.cfg.Email)}
 	if err := s.st.CreateProject(p); err != nil {
 		return nil, err
 	}
-	_ = s.st.AddEvent(id, "", "project.created", s.cfg.Actor, map[string]any{"name": name})
+	_ = s.st.AddEvent(id, "", "project.created", s.cfg.Actor, map[string]any{"name": name, "parent": parentID})
+	if parentID != "" {
+		_ = s.st.AddEvent(parentID, "", "subproject.created", s.cfg.Actor, map[string]any{"name": name, "zone": id})
+	}
 	return p, nil
 }
 
@@ -144,6 +174,10 @@ func (s *Service) Sync(projectID string) error {
 }
 
 func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
+	// Un proyecto descubierto en la carpeta compartida todavía no tiene clon.
+	if err := vcs.EnsureClone(repo.Bare, repo.Local); err != nil {
+		return err
+	}
 	if err := repo.Pull(vcs.MainBranch); err != nil {
 		return err
 	}
@@ -183,6 +217,16 @@ func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
 		}
 	}
 
+	// Drawings that left main (removed, or moved out by an integration) must
+	// leave the index too.
+	if stale, err := s.st.ListDrawings(projectID); err == nil {
+		for _, d := range stale {
+			if !seen[d.Path] {
+				_ = s.st.DeleteDrawing(d.ID)
+			}
+		}
+	}
+
 	// Revisions of main.
 	if err := s.backfill(projectID, repo, vcs.MainBranch, ""); err != nil {
 		return err
@@ -199,58 +243,22 @@ func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
 	active := map[string]bool{}
 	for _, m := range metas {
 		active[m.Name] = true
-		head, err := repo.HeadOf(m.Name)
-		if err != nil {
-			continue
-		}
-		b, err := s.st.GetBranchByName(m.Name)
-		if err != nil {
+		if err := s.upsertWorkBranch(projectID, repo, m, true); err != nil {
 			return err
 		}
-		if b == nil {
-			b = &store.Branch{
-				ID:         branchID(m.Name),
-				ProjectID:  projectID,
-				Name:       m.Name,
-				Title:      m.Title,
-				Author:     m.Author,
-				Status:     "open",
-				BaseCommit: m.BaseCommit,
-				HeadCommit: head,
-			}
-			if err := s.st.CreateBranch(b); err != nil {
-				return err
-			}
-		} else {
-			b.HeadCommit = head
-			if b.Title == "" {
-				b.Title = m.Title
-			}
-			if err := s.st.UpdateBranch(b); err != nil {
-				return err
-			}
-		}
-
-		files, err := s.branchFileStates(repo, m.Name, m.BaseCommit, head, m.Drawings)
-		if err == nil {
-			_ = s.st.SetBranchFiles(b.ID, files)
-		}
-		_ = s.backfill(projectID, repo, m.Name, b.ID)
 	}
 
-	// Branches merged elsewhere should still disappear from the work list.
+	// Una tarea abierta aquí cuya rama ya no está en la carpeta compartida fue
+	// descartada en otro equipo.
 	open, err := s.st.ListBranches(projectID, "active")
 	if err == nil {
-		for _, b := range open {
-			if !active[b.Name] && strings.HasPrefix(b.Name, vcs.BranchPrefix) {
-				b.Status = "merged"
-				if b.MergedAt == 0 {
-					b.MergedAt = time.Now().UnixMilli()
-				}
-				_ = s.st.UpdateBranch(&b)
+		for i := range open {
+			if !active[open[i].Name] && strings.HasPrefix(open[i].Name, vcs.BranchPrefix) {
+				s.syncBranchState(repo, &open[i])
 			}
 		}
 	}
+	_ = s.refreshProjectFile(projectID, repo)
 
 	// Refresh drawing size/blob from main (they may have been merged in).
 	return s.st.TouchProject(projectID)
@@ -337,7 +345,7 @@ func (s *Service) Import(projectID string, files []IncomingFile, actor string) (
 				return fmt.Errorf("%s: solo se aceptan archivos .dwg", f.Name)
 			}
 			if !looksLikeDWG(f.Content) {
-				return fmt.Errorf("%s: no parece un DWG válido (cabecera desconocida)", f.Name)
+				return fmt.Errorf("%s: no parece un DWG válido (recibí %d bytes, cabecera %q)", f.Name, len(f.Content), head(f.Content, 6))
 			}
 			name := sanitizeFileName(f.Name)
 			payload[vcs.DrawingsDir+"/"+name] = f.Content
@@ -466,28 +474,35 @@ func (s *Service) CreateBranch(in CreateBranchInput) (*store.Branch, error) {
 		}
 
 		meta := vcs.BranchMeta{
-			Name:       name,
-			Title:      title,
-			Author:     author,
-			BaseCommit: base,
-			CreatedAt:  time.Now().UnixMilli(),
-			Drawings:   normalized,
-			Notes:      in.Notes,
+			Name:        name,
+			Title:       title,
+			Author:      author,
+			AuthorEmail: identity.Normalize(s.cfg.Email),
+			BaseCommit:  base,
+			CreatedAt:   time.Now().UnixMilli(),
+			Drawings:    normalized,
+			Notes:       in.Notes,
 		}
 		head, err := repo.CreateBranch(name, meta, author)
 		if err != nil {
 			return err
 		}
 
+		tree, _ := repo.DrawingsTreeHash(name)
 		b := &store.Branch{
-			ID:         branchID(name),
-			ProjectID:  in.ProjectID,
-			Name:       name,
-			Title:      title,
-			Author:     author,
-			Status:     "open",
-			BaseCommit: base,
-			HeadCommit: head,
+			ID:          branchID(name),
+			ProjectID:   in.ProjectID,
+			Name:        name,
+			Title:       title,
+			Author:      author,
+			AuthorEmail: meta.AuthorEmail,
+			Status:      "open",
+			BaseCommit:  base,
+			HeadCommit:  head,
+			TreeHash:    tree,
+			// La misma fecha que queda escrita en git, para que todos los
+			// equipos coincidan en cuándo se abrió.
+			CreatedAt: meta.CreatedAt,
 		}
 		if err := s.st.CreateBranch(b); err != nil {
 			return err
@@ -564,6 +579,11 @@ func (s *Service) Upload(branchID string, file IncomingFile, message, actor stri
 	if b.Status == "open" {
 		b.Status = "review"
 	}
+	// Un plano nuevo cambia el contenido revisado: las aprobaciones previas
+	// quedan obsoletas (se comparan contra este hash).
+	if tree, err := repo.DrawingsTreeHash(b.Name); err == nil {
+		b.TreeHash = tree
+	}
 	if err := s.st.UpdateBranch(b); err != nil {
 		return nil, err
 	}
@@ -625,6 +645,20 @@ func (s *Service) Merge(branchID, strategy, actor string) (*vcs.MergeResult, err
 	repo := s.repo(b.ProjectID)
 	var res *vcs.MergeResult
 	err = repo.WithLock(func() error {
+		// Compuerta de aprobaciones. Se decide con lo último de la carpeta
+		// compartida, no con la copia local: otro equipo pudo aprobar, rechazar
+		// o subir un plano nuevo hace un minuto.
+		if err := repo.SyncBranches(); err != nil {
+			return err
+		}
+		_ = s.refreshProjectFile(b.ProjectID, repo)
+		if err := s.refreshReview(repo, b); err != nil {
+			return err
+		}
+		if st := s.reviewState(b); st.Required && !st.Complete {
+			return &ErrNeedsApproval{State: st}
+		}
+
 		changed, err := repo.ChangedSince(b.BaseCommit, b.Name)
 		if err != nil {
 			return err
@@ -850,8 +884,16 @@ func (s *Service) Stats() (map[string]any, error) {
 
 // ---------------------------------------------------------------- helpers
 
+// drawingID keeps the folder in the slug so that drawings/norte/planta.dwg and
+// drawings/sur/planta.dwg (a master holds one folder per zone) do not collide.
+// For flat paths the result is the same as always.
 func drawingID(projectID, p string) string {
-	return projectID + "--" + slugify(strings.TrimSuffix(path.Base(p), path.Ext(p)))
+	return projectID + "--" + slugify(drawingRel(p))
+}
+
+// drawingRel is the path inside drawings/ without extension.
+func drawingRel(p string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(p, vcs.DrawingsDir+"/"), path.Ext(p))
 }
 
 func branchID(name string) string { return slugify(strings.TrimPrefix(name, vcs.BranchPrefix)) }
@@ -864,10 +906,7 @@ func revisionID(commit, p string) string {
 	return c + "-" + slugify(strings.TrimSuffix(path.Base(p), path.Ext(p)))
 }
 
-func displayName(p string) string {
-	base := path.Base(p)
-	return strings.TrimSuffix(base, path.Ext(base))
-}
+func displayName(p string) string { return drawingRel(p) }
 
 func shortSHA(s string) string {
 	if len(s) > 8 {
@@ -895,6 +934,13 @@ func sanitizeFileName(name string) string {
 }
 
 // looksLikeDWG validates the 6-byte AutoCAD signature ("AC1015" … "AC1032").
+func head(b []byte, n int) string {
+	if len(b) < n {
+		n = len(b)
+	}
+	return string(b[:n])
+}
+
 func looksLikeDWG(b []byte) bool {
 	if len(b) < 6 {
 		return false

@@ -85,7 +85,7 @@ export function TasksPage() {
             {f.label}
           </button>
         ))}
-        <Badge variant="outline" className="ml-2 font-mono text-[10px]">
+        <Badge variant="outline" className="tnum ml-2">
           {rows.length}
         </Badge>
       </div>
@@ -110,16 +110,16 @@ export function TasksPage() {
                 <div className="mb-2 flex items-center gap-2 px-1">
                   <Link
                     to={`/p/${projectId}`}
-                    className="text-[11px] font-semibold tracking-[0.14em] uppercase text-muted-foreground hover:text-foreground"
+                    className="hover:text-primary text-[13.5px] font-semibold tracking-tight"
                   >
                     {group.name}
                   </Link>
-                  <span className="text-muted-foreground/50 font-mono text-[10px]">/{projectId}</span>
+                  <span className="text-muted-foreground/60 font-mono text-[11px]">{projectId}</span>
                   <span className="text-muted-foreground ml-auto text-[11px]">
                     {group.items.length} rama(s)
                   </span>
                 </div>
-                <div className="divide-y overflow-hidden rounded-lg border bg-card">
+                <div className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
                   {group.items.map((b) => (
                     <BranchRow key={b.id} branch={b} projectId={projectId} />
                   ))}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"lcs/internal/identity"
 )
 
 // Config holds the runtime configuration resolved from the environment.
@@ -19,6 +21,7 @@ import (
 //	LCS_DATA_DIR   local per-machine state (db, local clones, cache)
 //	LCS_PORT       127.0.0.1 listen port (default 7809)
 //	LCS_ACTOR      display name recorded on commits (default OS user)
+//	LCS_EMAIL      identity override; by default it is the Windows UPN (whoami /upn)
 //	LCS_SEED_DIR   optional folder imported into a new project
 //
 // A JSON file at <LCS_DATA_DIR>/config.json is used as a fallback so the exe
@@ -33,6 +36,12 @@ type Config struct {
 	SeedDir   string
 	// Source says where the workspace came from: "entorno" or "config.json".
 	Source string
+
+	// Identity of the person using this machine. It comes from the Windows
+	// session (whoami /upn) unless LCS_EMAIL / config.json "email" overrides it.
+	Email         string
+	EmailVerified bool
+	EmailSource   string
 }
 
 type fileConfig struct {
@@ -40,6 +49,7 @@ type fileConfig struct {
 	Port      int    `json:"port"`
 	Actor     string `json:"actor"`
 	SeedDir   string `json:"seedDir"`
+	Email     string `json:"email"`
 }
 
 // ConfigPath is the on-disk configuration file read when env vars are absent.
@@ -133,6 +143,16 @@ func Load() (*Config, error) {
 			c.Actor = "operador"
 		}
 	}
+
+	emailOverride := strings.TrimSpace(os.Getenv("LCS_EMAIL"))
+	if emailOverride == "" {
+		emailOverride = strings.TrimSpace(fc.Email)
+	}
+	if emailOverride != "" && !identity.IsEmail(emailOverride) {
+		return nil, fmt.Errorf("LCS_EMAIL inválido: %q no es un correo", emailOverride)
+	}
+	id := identity.Resolve(emailOverride)
+	c.Email, c.EmailVerified, c.EmailSource = id.Email, id.Verified, id.Source
 
 	return c, nil
 }

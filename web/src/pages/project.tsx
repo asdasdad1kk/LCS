@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowUpRight,
+  CheckCircle2,
   FileBox,
   GitBranch,
   LayoutTemplate,
+  PencilLine,
   Plus,
   RefreshCw,
+  ShieldCheck,
+  Split,
   Upload
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -20,15 +25,22 @@ import { PageHeader, EmptyState } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ActivityRow } from '@/pages/dashboard'
 import { ImportDrawingsDialog, NewTaskDialog } from '@/components/dialogs'
-import { formatBytes, fileName, initials, shortSha, timeAgo } from '@/lib/format'
+import { NewProjectDialog } from '@/components/new-project-dialog'
+import { ApproversEditor } from '@/components/approvers-editor'
+import { IntegrateButton, useIntegrateZone } from '@/components/integrate-zone'
+import { formatBytes, fileName, initials, planos, shortSha, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 export function ProjectPage() {
   const { projectId = '' } = useParams()
+  const [searchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
   const navigate = useNavigate()
+  const shell = useOutletContext<{ reloadProjects?: () => void } | null>()
   const [data, setData] = useState<ProjectDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [newTask, setNewTask] = useState(false)
+  const [newZone, setNewZone] = useState(false)
   const [importing, setImporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
 
@@ -45,6 +57,12 @@ export function ProjectPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  const refreshAll = useCallback(async () => {
+    await load()
+    shell?.reloadProjects?.()
+  }, [load, shell])
+  const { integrate, busyId, dialog: conflictDialog } = useIntegrateZone(refreshAll)
 
   const active = useMemo(
     () => (data?.branches ?? []).filter((b) => b.status === 'open' || b.status === 'review'),
@@ -79,18 +97,26 @@ export function ProjectPage() {
   }
   if (!data) return <div className="p-6 text-sm">Proyecto no encontrado.</div>
 
-  const { project, drawings, mainHead, usage } = data
+  const { project, parent, children, integration, drawings, mainHead, usage } = data
+  const isZone = !!project.parentId
+  const zoneChanges = integration ? integration.changed.length + integration.removed.length : 0
+  const lateZones = children.filter((z) => z.pendingChanges > 0)
 
   return (
     <div className="scrollbar-thin flex-1 overflow-y-auto">
       <PageHeader
         eyebrow={
           <>
-            <Link to="/" className="hover:text-foreground inline-flex items-center gap-1">
-              <ArrowLeft className="size-3" /> panel
+            <Link
+              to={parent ? `/p/${parent.id}` : '/proyectos'}
+              className="hover:text-foreground inline-flex items-center gap-1"
+            >
+              <ArrowLeft className="size-3" /> {parent ? parent.name : 'proyectos'}
             </Link>
             <span className="opacity-40">/</span>
-            <span className="font-mono text-[10px] normal-case tracking-normal">{project.id}</span>
+            <span className="font-mono text-[11px] normal-case tracking-normal">{project.id}</span>
+            {isZone && <Badge variant="outline">Zona</Badge>}
+            {!isZone && children.length > 0 && <Badge variant="default">Master</Badge>}
           </>
         }
         title={project.name}
@@ -100,6 +126,11 @@ export function ProjectPage() {
             <Button variant="outline" size="sm" onClick={sync} disabled={syncing}>
               <RefreshCw className={syncing ? 'size-4 animate-spin' : 'size-4'} /> Sincronizar
             </Button>
+            {!isZone && (
+              <Button variant="outline" size="sm" onClick={() => setNewZone(true)}>
+                <Split className="size-4" /> Nuevo subproyecto
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
               <Upload className="size-4" /> Importar
             </Button>
@@ -110,17 +141,93 @@ export function ProjectPage() {
         }
       />
 
+      {isZone && parent && zoneChanges > 0 && (
+        <div className="px-6 pb-4">
+          <div className="border-warning/40 bg-warning/10 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border px-4 py-3">
+            <AlertTriangle className="text-warning size-5 shrink-0" />
+            <div className="min-w-0 flex-1 basis-72">
+              <p className="text-[13.5px] font-semibold">
+                Hay que actualizar el master «{parent.name}»
+              </p>
+              <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-relaxed">
+                Esta zona tiene {zoneChanges} plano(s) que el master todavía no tiene:{' '}
+                <span className="font-mono text-[11.5px]">
+                  {[...integration!.changed, ...integration!.removed]
+                    .slice(0, 3)
+                    .map((p) => fileName(p))
+                    .join(', ')}
+                  {zoneChanges > 3 ? `, +${zoneChanges - 3}` : ''}
+                </span>
+                . Al integrar se copian a <span className="font-mono text-[11.5px]">drawings/{project.id}/</span>{' '}
+                del master.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/p/${parent.id}`}>Ver master</Link>
+            </Button>
+            <IntegrateButton
+              zoneId={project.id}
+              zoneName={project.name}
+              busy={busyId === project.id}
+              onIntegrate={integrate}
+            >
+              Actualizar master
+            </IntegrateButton>
+          </div>
+        </div>
+      )}
+      {isZone && parent && zoneChanges === 0 && integration && integration.integratedAt > 0 && (
+        <div className="px-6 pb-4">
+          <div className="text-muted-foreground bg-card flex items-center gap-2 rounded-lg border px-4 py-2 text-[12.5px]">
+            <CheckCircle2 className="text-success size-4" />
+            El master «{parent.name}» tiene la última versión de esta zona · integrado{' '}
+            {timeAgo(integration.integratedAt)}
+          </div>
+        </div>
+      )}
+      {!isZone && lateZones.length > 0 && (
+        <div className="px-6 pb-4">
+          <div className="border-warning/40 bg-warning/10 rounded-lg border">
+            <div className="flex items-center gap-2 px-4 pt-3 pb-2 text-[13.5px] font-semibold">
+              <AlertTriangle className="text-warning size-4" />
+              {lateZones.length === 1
+                ? '1 zona tiene cambios que este master todavía no tiene'
+                : `${lateZones.length} zonas tienen cambios que este master todavía no tiene`}
+            </div>
+            <div className="divide-warning/20 divide-y">
+              {lateZones.map((z) => (
+                <div key={z.id} className="flex items-center gap-3 px-4 py-2">
+                  <Link to={`/p/${z.id}`} className="min-w-0 flex-1 text-[13px] font-medium hover:underline">
+                    {z.name}
+                    <span className="text-muted-foreground font-normal">
+                      {' '}
+                      · {z.pendingChanges} plano(s) sin integrar
+                    </span>
+                  </Link>
+                  <IntegrateButton
+                    zoneId={z.id}
+                    zoneName={z.name}
+                    busy={busyId === z.id}
+                    onIntegrate={integrate}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 px-6 pb-5 lg:grid-cols-4">
         <Stat label="Planos" value={drawings.length} icon={FileBox} />
         <Stat label="Ramas activas" value={active.length} icon={GitBranch} />
         <Stat label="Integradas" value={done.length} icon={LayoutTemplate} />
-        <div className="rounded-lg border bg-card px-4 py-3">
-          <div className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+        <div className="rounded-lg border bg-card px-4 py-3.5 shadow-xs">
+          <div className="text-muted-foreground text-[12.5px] font-medium">
             Repositorio
           </div>
           <div
             className={cn(
-              'mt-1.5 text-lg leading-none font-semibold tabular-nums',
+              'mt-2 text-[22px] leading-none font-semibold tabular-nums tracking-tight',
               (usage?.repo ?? 0) > 20 * 1024 ** 3 && 'text-warning'
             )}
           >
@@ -135,12 +242,77 @@ export function ProjectPage() {
       </div>
 
       <div className="px-6 pb-10">
-        <Tabs defaultValue="drawings">
+        <Tabs defaultValue={tabParam ?? (children.length > 0 ? 'zones' : 'drawings')}>
           <TabsList>
+            {!isZone && (
+              <TabsTrigger value="zones">
+                Subproyectos · {children.length}
+              </TabsTrigger>
+            )}
             <TabsTrigger value="drawings">Planos · {drawings.length}</TabsTrigger>
             <TabsTrigger value="tasks">Tareas · {active.length}</TabsTrigger>
+            <TabsTrigger value="approvers">
+              <ShieldCheck /> Aprobadores
+            </TabsTrigger>
             <TabsTrigger value="history">Historial</TabsTrigger>
           </TabsList>
+
+          {!isZone && (
+            <TabsContent value="zones" className="mt-4">
+              {children.length === 0 ? (
+                <EmptyState
+                  icon={Split}
+                  title="Este proyecto no tiene subproyectos"
+                  description="Creá una zona o área específica para trabajarla por separado. Cuando cambie, LCS avisará que hay que actualizar este master."
+                  action={
+                    <Button size="sm" onClick={() => setNewZone(true)}>
+                      <Plus className="size-4" /> Nuevo subproyecto
+                    </Button>
+                  }
+                />
+              ) : (
+                <div className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
+                  {children.map((z) => (
+                    <div key={z.id} className="flex items-center gap-3 px-3.5 py-3">
+                      <div className="bg-muted text-muted-foreground grid size-9 shrink-0 place-items-center rounded-md">
+                        <Split className="size-4" />
+                      </div>
+                      <Link to={`/p/${z.id}`} className="min-w-0 flex-1">
+                        <div className="truncate text-[13px] font-medium hover:underline">{z.name}</div>
+                        <div className="text-muted-foreground tnum mt-0.5 text-[12px]">
+                          {planos(z.drawings)}
+                          {z.integratedAt ? ` · integrado ${timeAgo(z.integratedAt)}` : ' · nunca integrado'}
+                        </div>
+                      </Link>
+                      {z.pendingChanges > 0 ? (
+                        <>
+                          <Badge variant="warning" className="tnum">
+                            {z.pendingChanges} sin integrar
+                          </Badge>
+                          <IntegrateButton
+                            zoneId={z.id}
+                            zoneName={z.name}
+                            busy={busyId === z.id}
+                            onIntegrate={integrate}
+                            size="xs"
+                            variant="outline"
+                          >
+                            Actualizar master
+                          </IntegrateButton>
+                        </>
+                      ) : z.drawings === 0 ? (
+                        <Badge variant="muted">Sin planos</Badge>
+                      ) : (
+                        <Badge variant="success" className="gap-1">
+                          <CheckCircle2 /> Al día
+                        </Badge>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          )}
 
           <TabsContent value="drawings" className="mt-4">
             {drawings.length === 0 ? (
@@ -160,7 +332,7 @@ export function ProjectPage() {
                   <Link
                     key={d.id}
                     to={`/p/${projectId}/d/${d.id}`}
-                    className="group hover:border-primary/40 rounded-lg border bg-card transition-colors"
+                    className="group hover:border-primary/40 rounded-lg border bg-card shadow-xs transition-[border-color,box-shadow] hover:shadow-sm"
                   >
                     <div className="flex items-start gap-3 p-3.5">
                       <div className="bg-muted/50 grid size-9 shrink-0 place-items-center rounded-md border">
@@ -172,11 +344,21 @@ export function ProjectPage() {
                           {d.path}
                         </div>
                         <div className="text-muted-foreground mt-2 flex items-center gap-2 text-[11px]">
-                          <span className="font-mono">{formatBytes(d.size)}</span>
+                          <span className="tnum">{formatBytes(d.size)}</span>
                           <span>·</span>
                           <span>{timeAgo(d.updatedAt)}</span>
                           <ArrowUpRight className="ml-auto size-3 opacity-0 transition-opacity group-hover:opacity-60" />
                         </div>
+                        {(data.editing?.[d.path]?.length ?? 0) > 0 && (
+                          <div
+                            className="mt-2"
+                            title={data.editing![d.path].map((e) => `${e.author}: ${e.title}`).join('\n')}
+                          >
+                            <Badge variant="warning" className="gap-1">
+                              <PencilLine /> En edición · {data.editing![d.path].map((e) => e.author).join(', ')}
+                            </Badge>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </Link>
@@ -219,6 +401,10 @@ export function ProjectPage() {
             )}
           </TabsContent>
 
+          <TabsContent value="approvers" className="mt-4">
+            <ApproversEditor projectId={projectId} onSaved={refreshAll} />
+          </TabsContent>
+
           <TabsContent value="history" className="mt-4">
             <div className="divide-y overflow-hidden rounded-lg border bg-card">
               {data.events.map((e: ActivityEvent) => (
@@ -245,8 +431,22 @@ export function ProjectPage() {
         open={importing}
         onOpenChange={setImporting}
         projectId={projectId}
-        onDone={load}
+        onDone={refreshAll}
       />
+      {!isZone && (
+        <NewProjectDialog
+          open={newZone}
+          onOpenChange={setNewZone}
+          masters={[project]}
+          parentId={project.id}
+          lockParent
+          onCreated={(z) => {
+            shell?.reloadProjects?.()
+            navigate(`/p/${z.id}`)
+          }}
+        />
+      )}
+      {conflictDialog}
     </div>
   )
 }
@@ -261,12 +461,12 @@ function Stat({
   icon: React.ComponentType<{ className?: string }>
 }) {
   return (
-    <div className="rounded-lg border bg-card px-4 py-3">
-      <div className="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
+    <div className="rounded-lg border bg-card px-4 py-3.5 shadow-xs">
+      <div className="text-muted-foreground flex items-center gap-2 text-[12.5px] font-medium">
         <Icon className="size-3.5" />
         {label}
       </div>
-      <div className="mt-1.5 text-2xl font-semibold tnum tracking-tight">{value}</div>
+      <div className="mt-2 text-[26px] leading-none font-semibold tnum tracking-tight">{value}</div>
     </div>
   )
 }
@@ -278,7 +478,7 @@ export function BranchRow({ branch: b, projectId }: { branch: Branch; projectId?
       to={`/p/${pid}/t/${b.id}`}
       className="hover:bg-muted/50 flex items-center gap-3 px-3.5 py-3 transition-colors"
     >
-      <div className="grid size-8 shrink-0 place-items-center rounded-md border bg-muted/40 font-mono text-[10px] font-bold">
+      <div className="bg-primary/10 text-primary grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold">
         {initials(b.author)}
       </div>
       <div className="min-w-0 flex-1">
@@ -286,7 +486,7 @@ export function BranchRow({ branch: b, projectId }: { branch: Branch; projectId?
           <span className="truncate text-[13px] font-medium">{b.title}</span>
           <StatusBadge status={b.status} />
         </div>
-        <div className="text-muted-foreground mt-0.5 flex items-center gap-2 truncate font-mono text-[11px]">
+        <div className="text-muted-foreground mt-0.5 flex items-center gap-2 truncate text-[12px]">
           <span className="truncate">{b.name}</span>
           {b.files?.length === 1 && (
             <>

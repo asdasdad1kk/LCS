@@ -10,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"lcs/internal/app"
 	"lcs/internal/store"
@@ -35,6 +36,15 @@ func (a *API) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/projects", a.wrap(a.createProject))
 	mux.HandleFunc("GET /api/projects/{id}", a.wrap(a.getProject))
 	mux.HandleFunc("POST /api/projects/{id}/sync", a.wrap(a.syncProject))
+	mux.HandleFunc("POST /api/projects/{id}/integrate", a.wrap(a.integrateProject))
+	mux.HandleFunc("GET /api/projects/{id}/approvers", a.wrap(a.getApprovers))
+	mux.HandleFunc("PUT /api/projects/{id}/approvers", a.wrap(a.putApprovers))
+	mux.HandleFunc("GET /api/projects/{id}/editing", a.wrap(a.editing))
+	mux.HandleFunc("GET /api/me", a.wrap(a.me))
+	mux.HandleFunc("GET /api/approvals", a.wrap(a.approvalsPanel))
+	mux.HandleFunc("GET /api/branches/{id}/review", a.wrap(a.review))
+	mux.HandleFunc("POST /api/branches/{id}/approve", a.wrap(a.approve))
+	mux.HandleFunc("POST /api/branches/{id}/reject", a.wrap(a.reject))
 	mux.HandleFunc("POST /api/projects/{id}/import", a.wrap(a.importDrawings))
 	mux.HandleFunc("GET /api/projects/{id}/branches", a.wrap(a.listBranches))
 	mux.HandleFunc("POST /api/projects/{id}/branches", a.wrap(a.createBranch))
@@ -59,7 +69,14 @@ func (a *API) wrap(h H) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r); err != nil {
 			var conflict *vcs.ErrConflict
+			var needs *app.ErrNeedsApproval
 			switch {
+			case errors.As(err, &needs):
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":         needs.Error(),
+					"needsApproval": true,
+					"nodes":         needs.State.Nodes,
+				})
 			case errors.As(err, &conflict):
 				writeJSON(w, http.StatusConflict, map[string]any{
 					"error":  "conflicto de revisión",
@@ -93,10 +110,12 @@ func (a *API) bootstrap(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, 200, map[string]any{
-		"app":     "LCS",
-		"version": "0.1.0",
-		"actor":   a.svc.Config().Actor,
-		"config":  stats,
+		"app":      "LCS",
+		"version":  "0.1.0",
+		"actor":    a.svc.Config().Actor,
+		"me":       a.svc.Identity(),
+		"localUrl": strings.TrimSuffix(a.svc.Config().LocalURL(), "/"),
+		"config":   stats,
 	})
 	return nil
 }
@@ -123,6 +142,8 @@ func (a *API) activity(w http.ResponseWriter, r *http.Request) error {
 // ---------------------------------------------------------------- projects
 
 func (a *API) listProjects(w http.ResponseWriter, r *http.Request) error {
+	// Proyectos que otras personas crearon en la carpeta compartida.
+	a.svc.MaybeDiscover(30 * time.Second)
 	projects, err := a.svc.Store().ListProjects()
 	if err != nil {
 		return err
@@ -131,12 +152,33 @@ func (a *API) listProjects(w http.ResponseWriter, r *http.Request) error {
 		store.Project
 		Drawings int `json:"drawings"`
 		Open     int `json:"openBranches"`
+		// Zonas: cuántos planos tiene la zona sin copiar al master, y para un
+		// master cuántas de sus zonas están atrasadas.
+		PendingChanges int `json:"pendingChanges"`
+		Zones          int `json:"zones"`
+		PendingZones   int `json:"pendingZones"`
 	}
-	out := []projectCard{}
+	out := make([]projectCard, 0, len(projects))
+	index := map[string]int{}
 	for _, p := range projects {
 		ds, _ := a.svc.Store().ListDrawings(p.ID)
 		bs, _ := a.svc.Store().ListBranches(p.ID, "active")
-		out = append(out, projectCard{Project: p, Drawings: len(ds), Open: len(bs)})
+		card := projectCard{Project: p, Drawings: len(ds), Open: len(bs)}
+		if p.ParentID != "" {
+			if ch, err := a.svc.ZoneChanges(&p); err == nil {
+				card.PendingChanges = ch.Count()
+			}
+		}
+		index[p.ID] = len(out)
+		out = append(out, card)
+	}
+	for _, c := range out {
+		if i, ok := index[c.ParentID]; ok && c.ParentID != "" {
+			out[i].Zones++
+			if c.PendingChanges > 0 {
+				out[i].PendingZones++
+			}
+		}
 	}
 	writeJSON(w, 200, out)
 	return nil
@@ -184,18 +226,68 @@ func (a *API) getProject(w http.ResponseWriter, r *http.Request) error {
 
 	repoBytes, cloneBytes, _ := a.svc.Usage(id)
 
+	// Master ↔ zonas.
+	type zoneCard struct {
+		store.Project
+		Drawings       int `json:"drawings"`
+		PendingChanges int `json:"pendingChanges"`
+	}
+	var parent *store.Project
+	children := []zoneCard{}
+	var integration any
+	if p.ParentID != "" {
+		parent, _ = a.svc.Store().GetProject(p.ParentID)
+		ch, _ := a.svc.ZoneChanges(p)
+		integration = map[string]any{
+			"changed":      nonNil(ch.Changed),
+			"removed":      nonNil(ch.Removed),
+			"integratedAt": p.IntegratedAt,
+		}
+	} else {
+		zones, _ := a.svc.Store().ListChildren(id)
+		for _, z := range zones {
+			zd, _ := a.svc.Store().ListDrawings(z.ID)
+			ch, _ := a.svc.ZoneChanges(&z)
+			children = append(children, zoneCard{Project: z, Drawings: len(zd), PendingChanges: ch.Count()})
+		}
+	}
+
 	writeJSON(w, 200, map[string]any{
-		"project":   p,
-		"drawings":  drawings,
-		"branches":  branches,
-		"events":    events,
-		"mainHead":  mainHead,
-		"workspace": a.svc.Config().Workspace,
+		"project":     p,
+		"parent":      parent,
+		"children":    children,
+		"integration": integration,
+		"editing":     a.svc.Editing(id, false),
+		"drawings":    drawings,
+		"branches":    branches,
+		"events":      events,
+		"mainHead":    mainHead,
+		"workspace":   a.svc.Config().Workspace,
 		"usage": map[string]int64{
 			"repo":  repoBytes,
 			"clone": cloneBytes,
 		},
 	})
+	return nil
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func (a *API) integrateProject(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		Strategy string `json:"strategy"`
+	}
+	_ = readJSON(r, &body)
+	res, err := a.svc.IntegrateZone(r.PathValue("id"), body.Strategy, a.svc.Config().Actor)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, res)
 	return nil
 }
 
@@ -505,3 +597,77 @@ func readUploadedFile(r *http.Request) (app.IncomingFile, error) {
 	}
 	return app.IncomingFile{}, errors.New("falta el archivo DWG")
 }
+
+// ---------------------------------------------------------------- identidad y aprobaciones
+
+func (a *API) me(w http.ResponseWriter, r *http.Request) error {
+	writeJSON(w, 200, a.svc.Identity())
+	return nil
+}
+
+func (a *API) getApprovers(w http.ResponseWriter, r *http.Request) error {
+	v, err := a.svc.Approvers(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, v)
+	return nil
+}
+
+func (a *API) putApprovers(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		Approvers []vcs.Approver `json:"approvers"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		return err
+	}
+	v, err := a.svc.SetApprovers(r.PathValue("id"), body.Approvers)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, v)
+	return nil
+}
+
+// editing dice qué planos tiene alguien en edición. Consulta la carpeta
+// compartida, así que la pantalla solo la pide al abrir el diálogo de tarea.
+func (a *API) editing(w http.ResponseWriter, r *http.Request) error {
+	writeJSON(w, 200, a.svc.Editing(r.PathValue("id"), true))
+	return nil
+}
+
+func (a *API) approvalsPanel(w http.ResponseWriter, r *http.Request) error {
+	panel, err := a.svc.ApprovalsPanel()
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, panel)
+	return nil
+}
+
+func (a *API) review(w http.ResponseWriter, r *http.Request) error {
+	v, err := a.svc.Review(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, v)
+	return nil
+}
+
+func (a *API) decide(w http.ResponseWriter, r *http.Request, decision string) error {
+	var body struct {
+		Comment string `json:"comment"`
+	}
+	_ = readJSON(r, &body)
+	v, err := a.svc.Decide(r.PathValue("id"), decision, body.Comment)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, v)
+	return nil
+}
+
+func (a *API) approve(w http.ResponseWriter, r *http.Request) error {
+	return a.decide(w, r, "approved")
+}
+func (a *API) reject(w http.ResponseWriter, r *http.Request) error { return a.decide(w, r, "rejected") }

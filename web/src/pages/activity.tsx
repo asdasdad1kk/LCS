@@ -38,7 +38,7 @@ export function ActivityPage() {
         ) : events.length === 0 ? (
           <EmptyState icon={Activity} title="Sin movimientos" description="Todavía no hay eventos." />
         ) : (
-          <div className="divide-y overflow-hidden rounded-lg border bg-card">
+          <div className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
             {events.map((e) => (
               <ActivityRow key={e.id} event={e} />
             ))}

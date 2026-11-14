@@ -124,6 +124,10 @@ func main() {
 
 func warm(srv *server.Server) {
 	svc := srv.Service()
+	// Proyectos creados por otras personas en la carpeta compartida.
+	if n := svc.Discover(false); n > 0 {
+		slog.Info("proyectos descubiertos en la carpeta compartida", "n", n)
+	}
 	projects, err := svc.Store().ListProjects()
 	if err != nil {
 		return
