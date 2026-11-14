@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
+import { cn } from '@/lib/utils'
 import { Link } from 'react-router-dom'
 import {
   ArrowUpRight,
+  Check,
+  GitCommitHorizontal,
+  GitMerge,
+  RotateCcw,
+  Trash2,
+  X,
+  type LucideIcon,
   Boxes,
   FileBox,
   GitBranch,
@@ -164,16 +172,13 @@ export function DashboardPage() {
             >
               Actividad reciente
             </SectionTitle>
-            <div className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
-              {events.slice(0, 6).map((e) => (
-                <ActivityRow key={e.id} event={e} />
-              ))}
-              {events.length === 0 && (
-                <div className="text-muted-foreground px-4 py-6 text-center text-[13px]">
-                  Sin movimientos todavía.
-                </div>
-              )}
-            </div>
+            {events.length > 0 ? (
+              <ActivityGraph events={events.slice(0, 6)} />
+            ) : (
+              <div className="text-muted-foreground rounded-lg border bg-card px-4 py-6 text-center text-[13px]">
+                Sin movimientos todavía.
+              </div>
+            )}
           </div>
         </section>
 
@@ -304,7 +309,29 @@ const eventLabels: Record<string, string> = {
   'project.discovered': 'encontró el proyecto en la carpeta compartida'
 }
 
-export function ActivityRow({ event }: { event: ActivityEvent }) {
+const graphKind: Record<string, { icon: LucideIcon; dot: string }> = {
+  'branch.merged': { icon: GitMerge, dot: 'bg-success text-white' },
+  'subproject.integrated': { icon: GitMerge, dot: 'bg-success text-white' },
+  'branch.approved': { icon: Check, dot: 'bg-success text-white' },
+  'branch.rejected': { icon: X, dot: 'bg-destructive text-white' },
+  'branch.closed': { icon: Trash2, dot: 'bg-muted text-muted-foreground' },
+  'branch.uploaded': { icon: GitCommitHorizontal, dot: 'bg-primary text-primary-foreground' },
+  'drawing.restored': { icon: RotateCcw, dot: 'bg-primary text-primary-foreground' }
+}
+const graphDefault = { icon: GitBranch, dot: 'bg-muted text-muted-foreground' }
+
+/** Historial al estilo árbol de commits (GitHub / Azure DevOps): riel vertical con nodos. */
+export function ActivityGraph({ events }: { events: ActivityEvent[] }) {
+  return (
+    <ol className="bg-card rounded-lg border px-3.5 py-3 shadow-xs">
+      {events.map((e, i) => (
+        <ActivityRow key={e.id} event={e} last={i === events.length - 1} />
+      ))}
+    </ol>
+  )
+}
+
+export function ActivityRow({ event, last = true }: { event: ActivityEvent; last?: boolean }) {
   let payload: any = {}
   try {
     payload = JSON.parse(event.payload)
@@ -318,10 +345,16 @@ export function ActivityRow({ event }: { event: ActivityEvent }) {
     payload.name ??
     payload.drawing ??
     (payload.count ? `${payload.count} archivos` : '')
+  const sha: string | undefined = typeof payload.commit === 'string' ? payload.commit : undefined
+  const g = graphKind[event.kind] ?? graphDefault
+  const Icon = g.icon
   return (
-    <div className="flex items-start gap-3 px-3.5 py-2.5">
-      <div className="mt-[7px] size-1.5 shrink-0 rounded-full bg-primary/70" />
-      <div className="min-w-0 flex-1">
+    <li className={cn('relative flex gap-3', last ? 'pb-0' : 'pb-4')}>
+      {!last && <span className="bg-border absolute top-6 bottom-0 left-[11px] w-0.5" />}
+      <span className={cn('ring-card relative z-10 grid size-6 shrink-0 place-items-center rounded-full ring-4', g.dot)}>
+        <Icon className="size-3.5" />
+      </span>
+      <div className="min-w-0 flex-1 pt-0.5">
         <p className="text-[13px] leading-snug">
           <span className="font-medium">{event.actor}</span>{' '}
           <span className="text-muted-foreground">
@@ -329,11 +362,12 @@ export function ActivityRow({ event }: { event: ActivityEvent }) {
           </span>
           {detail && <span className="text-foreground font-medium"> · {detail}</span>}
         </p>
-        <p className="text-muted-foreground tnum mt-0.5 text-[11.5px]">
+        <p className="text-muted-foreground tnum mt-0.5 flex items-center gap-2 text-[11.5px]">
           {timeAgo(event.createdAt)}
-          {payload.size ? ` · ${formatBytes(payload.size)}` : ''}
+          {payload.size ? <span>· {formatBytes(payload.size)}</span> : null}
+          {sha && <span className="bg-muted rounded px-1.5 font-mono text-[10.5px]">{shortSha(sha)}</span>}
         </p>
       </div>
-    </div>
+    </li>
   )
 }

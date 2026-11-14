@@ -286,11 +286,18 @@ export function DrawingPage() {
               {revisions.length === 0 && (
                 <p className="text-muted-foreground p-3 text-[12px]">Sin revisiones registradas.</p>
               )}
-              {revisions.map((r: Revision) => {
+              {revisions.map((r: Revision, idx: number) => {
                 const isCurrent = r.blobSha === drawing.mainBlob
                 return (
+                  <div key={r.id} className="relative pl-6">
+                    {idx < revisions.length - 1 && <span className="bg-border absolute top-4 -bottom-1 left-[9px] w-0.5" />}
+                    <span
+                      className={cn(
+                        'ring-card absolute top-3 left-[3px] z-10 size-3.5 rounded-full ring-4',
+                        isCurrent ? 'bg-success' : 'bg-muted-foreground/50'
+                      )}
+                    />
                   <div
-                    key={r.id}
                     role="button"
                     tabIndex={0}
                     onClick={() => setViewRef(r.commitSha)}
@@ -340,6 +347,7 @@ export function DrawingPage() {
                       </span>
                       {r.author} · {formatBytes(r.size)}
                     </div>
+                  </div>
                   </div>
                 )
               })}

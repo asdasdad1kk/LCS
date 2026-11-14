@@ -23,6 +23,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // La ventana de Wails carga el front por un proxy HTTP que no reenvía WebSockets:
+    // el cliente de HMR se conecta directo a Vite.
+    hmr: { protocol: 'ws', host: 'localhost', port: 5173 },
     proxy: {
       '/api': 'http://127.0.0.1:7809'
     }

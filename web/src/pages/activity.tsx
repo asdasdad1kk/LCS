@@ -3,7 +3,7 @@ import { Activity } from 'lucide-react'
 import { api, type ActivityEvent } from '@/lib/api'
 import { Skeleton } from '@/components/ui/separator'
 import { PageHeader, EmptyState } from '@/components/page-header'
-import { ActivityRow } from '@/pages/dashboard'
+import { ActivityGraph } from '@/pages/dashboard'
 
 export function ActivityPage() {
   const [events, setEvents] = useState<ActivityEvent[]>([])
@@ -38,11 +38,7 @@ export function ActivityPage() {
         ) : events.length === 0 ? (
           <EmptyState icon={Activity} title="Sin movimientos" description="Todavía no hay eventos." />
         ) : (
-          <div className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
-            {events.map((e) => (
-              <ActivityRow key={e.id} event={e} />
-            ))}
-          </div>
+          <ActivityGraph events={events} />
         )}
       </div>
     </div>

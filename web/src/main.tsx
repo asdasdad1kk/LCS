@@ -13,6 +13,7 @@ declare global {
       ToggleMaximise?: () => void
       Quit?: () => void
     } } }
+    runtime?: { WindowIsMaximised?: () => Promise<boolean> }
   }
 }
 

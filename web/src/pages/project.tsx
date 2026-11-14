@@ -23,7 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/separator'
 import { PageHeader, EmptyState } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
-import { ActivityRow } from '@/pages/dashboard'
+import { ActivityGraph } from '@/pages/dashboard'
 import { ImportDrawingsDialog, NewTaskDialog } from '@/components/dialogs'
 import { NewProjectDialog } from '@/components/new-project-dialog'
 import { ApproversEditor } from '@/components/approvers-editor'
@@ -406,16 +406,13 @@ export function ProjectPage() {
           </TabsContent>
 
           <TabsContent value="history" className="mt-4">
-            <div className="divide-y overflow-hidden rounded-lg border bg-card">
-              {data.events.map((e: ActivityEvent) => (
-                <ActivityRow key={e.id} event={e} />
-              ))}
-              {data.events.length === 0 && (
-                <div className="text-muted-foreground px-4 py-6 text-center text-[13px]">
-                  Sin movimientos.
-                </div>
-              )}
-            </div>
+            {data.events.length > 0 ? (
+              <ActivityGraph events={data.events} />
+            ) : (
+              <div className="text-muted-foreground rounded-lg border bg-card px-4 py-6 text-center text-[13px]">
+                Sin movimientos.
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </div>

@@ -1,22 +1,31 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity,
-  Boxes,
+  ArrowLeft,
+  ArrowRight,
   ChevronRight,
+  ClipboardCopy,
+  FolderPlus,
   FolderTree,
+  Home,
+  Info,
   LayoutDashboard,
-  Minus,
+  LogOut,
   Moon,
+  PanelLeft,
   Plus,
+  Redo2,
   RefreshCw,
+  RotateCw,
+  Scissors,
   ShieldCheck,
-  Square,
   Sun,
-  Waypoints,
-  X
+  TextSelect,
+  Undo2,
+  Waypoints
 } from 'lucide-react'
-import { Logo } from '@/components/logo'
+import { AppTitleBar, type MenuDef } from '@/components/app-titlebar'
 import { api, type Identity, type Project } from '@/lib/api'
 import { initials } from '@/lib/format'
 import { Button } from '@/components/ui/button'
@@ -27,7 +36,7 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarHeader,
+  SidebarGroupLabel,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
@@ -45,6 +54,7 @@ export function AppShell() {
   const [newProject, setNewProject] = useState(false)
   const [me, setMe] = useState<Identity | null>(null)
   const [pendingApprovals, setPendingApprovals] = useState(0)
+  const [connected, setConnected] = useState(false)
   const { theme, toggle } = useTheme()
   const location = useLocation()
   const navigate = useNavigate()
@@ -83,111 +93,43 @@ export function AppShell() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    api.bootstrap().then(() => setConnected(true)).catch(() => setConnected(false))
+  }, [])
+
+  const syncAll = useCallback(async () => {
+    const id = toast.loading('Sincronizando con el NAS…')
+    try {
+      await Promise.all(projects.map((project) => api.syncProject(project.id)))
+      await load()
+      toast.success('Sincronizado', { id })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'falló la sincronización', { id })
+    }
+  }, [projects, load])
+
   const crumbs = breadcrumbs(location.pathname, projects)
   const lateZones = projects.filter((p) => p.parentId && (p.pendingChanges ?? 0) > 0).length
   const masters = projects.filter((p) => !p.parentId)
+  // react-router guarda la posición en el historial: idx 0 = no hay a dónde volver.
+  const canGoBack = ((window.history.state?.idx as number | undefined) ?? 0) > 0
 
   return (
     <SidebarProvider>
-      <div className="app-frame flex h-full min-w-0">
-        <Sidebar variant="sidebar" collapsible="icon">
-          <SidebarHeader>
-            <Link to="/" className="flex min-w-0 items-center gap-2.5">
-              <Logo className="size-8 shrink-0" />
-              <span className="sidebar-label flex min-w-0 flex-col leading-none">
-                <span className="text-[14px] font-semibold tracking-tight">LCS</span>
-                <span className="mt-1 truncate text-[11px] text-white/45">Layout Control System</span>
-              </span>
-            </Link>
-          </SidebarHeader>
-
-          <SidebarContent>
-            <SidebarGroup className="pt-3 pb-1">
-              <SidebarMenu>
-                <CreateProjectButton onClick={() => setNewProject(true)} />
-              </SidebarMenu>
-            </SidebarGroup>
-
-            <SidebarGroup className="pt-1">
-              <SidebarMenu>
-                <NavItem to="/" icon={LayoutDashboard} label="Panel" end />
-                <NavItem
-                  to="/proyectos"
-                  icon={FolderTree}
-                  label="Proyectos"
-                  badge={lateZones}
-                  badgeTitle={`${lateZones} zona(s) con cambios sin integrar al master`}
-                  match={(path) => path === '/proyectos' || path.startsWith('/p/')}
-                />
-                <NavItem to="/tareas" icon={Waypoints} label="Tareas" />
-                <NavItem
-                  to="/aprobaciones"
-                  icon={ShieldCheck}
-                  label="Aprobaciones"
-                  badge={pendingApprovals}
-                  badgeTitle={`${pendingApprovals} tarea(s) esperan tu decisión`}
-                />
-                <NavItem to="/actividad" icon={Activity} label="Actividad" />
-              </SidebarMenu>
-            </SidebarGroup>
-          </SidebarContent>
-
-          <SidebarFooter>
-            {me && <IdentityChip me={me} />}
-            <FooterActions
-              theme={theme}
-              onToggleTheme={toggle}
-              onSync={async () => {
-                const id = toast.loading('Sincronizando con el NAS…')
-                try {
-                  await Promise.all(projects.map((project) => api.syncProject(project.id)))
-                  await load()
-                  toast.success('Sincronizado', { id })
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : 'falló la sincronización', { id })
-                }
-              }}
-            />
-          </SidebarFooter>
-        </Sidebar>
-
-        <SidebarInset>
-          <div className="app-titlebar flex h-11 shrink-0 items-center border-b px-4" onDoubleClick={() => window.go?.main?.App?.ToggleMaximise?.()}>
-            <SidebarTrigger />
-            <Separator orientation="vertical" className="mx-3 h-4" />
-            <nav aria-label="Ubicación" className="flex min-w-0 items-center gap-1.5 text-[12.5px]">
-              {crumbs.map((crumb, i) => {
-                const last = i === crumbs.length - 1
-                const cls = cn('truncate', last ? 'text-foreground font-medium' : 'text-muted-foreground')
-                return (
-                  <span key={i} className="flex min-w-0 items-center gap-1.5">
-                    {i > 0 && <ChevronRight className="text-muted-foreground/50 size-3.5 shrink-0" />}
-                    {crumb.to && !last ? (
-                      <Link to={crumb.to} className={cn(cls, 'hover:text-foreground')} onDoubleClick={(e) => e.stopPropagation()}>
-                        {crumb.label}
-                      </Link>
-                    ) : (
-                      <span className={cls}>{crumb.label}</span>
-                    )}
-                  </span>
-                )
-              })}
-            </nav>
-            <div className="window-controls -mr-4 ml-auto flex h-full shrink-0 items-center pl-4">
-              <button aria-label="Minimizar" title="Minimizar" onClick={() => window.go?.main?.App?.Minimise?.()}>
-                <Minus className="size-4" strokeWidth={1.5} />
-              </button>
-              <button aria-label="Maximizar" title="Maximizar" onClick={() => window.go?.main?.App?.ToggleMaximise?.()}>
-                <Square className="size-3" strokeWidth={1.75} />
-              </button>
-              <button className="window-close" aria-label="Cerrar" title="Cerrar" onClick={() => window.go?.main?.App?.Quit?.()}>
-                <X className="size-4" strokeWidth={1.5} />
-              </button>
-            </div>
-          </div>
-          <Outlet context={{ reloadProjects: load }} />
-        </SidebarInset>
-      </div>
+      <ShellBody
+        crumbs={crumbs}
+        me={me}
+        connected={connected}
+        pendingApprovals={pendingApprovals}
+        lateZones={lateZones}
+        theme={theme}
+        canGoBack={canGoBack}
+        onToggleTheme={toggle}
+        onSync={syncAll}
+        onNewProject={() => setNewProject(true)}
+        reloadProjects={load}
+        navigate={(to) => (typeof to === 'number' ? navigate(to) : navigate(to))}
+      />
 
       <NewProjectDialog
         open={newProject}
@@ -199,6 +141,237 @@ export function AppShell() {
         }}
       />
     </SidebarProvider>
+  )
+}
+
+type ShellBodyProps = {
+  crumbs: Crumb[]
+  me: Identity | null
+  connected: boolean
+  pendingApprovals: number
+  lateZones: number
+  theme: string
+  canGoBack: boolean
+  onToggleTheme: () => void
+  onSync: () => Promise<void>
+  onNewProject: () => void
+  reloadProjects: () => Promise<void>
+  navigate: (to: string | number) => void
+}
+
+function ShellBody({
+  crumbs,
+  me,
+  connected,
+  pendingApprovals,
+  lateZones,
+  theme,
+  canGoBack,
+  onToggleTheme,
+  onSync,
+  onNewProject,
+  reloadProjects,
+  navigate
+}: ShellBodyProps) {
+  const { toggle: toggleSidebar, open } = useSidebar()
+  const quit = () => window.go?.main?.App?.Quit?.()
+  const exec = (cmd: string) => document.execCommand(cmd)
+
+  const menus: MenuDef[] = [
+    {
+      id: 'file',
+      label: 'Archivo',
+      items: [
+        { label: 'Nuevo proyecto…', icon: FolderPlus, shortcut: 'Ctrl+N', onSelect: onNewProject },
+        { label: 'Sincronizar con el NAS', icon: RefreshCw, shortcut: 'Ctrl+R', onSelect: () => void onSync() },
+        { type: 'sep' },
+        { label: 'Salir', icon: LogOut, shortcut: 'Ctrl+Q', danger: true, onSelect: quit }
+      ]
+    },
+    {
+      id: 'edit',
+      label: 'Editar',
+      items: [
+        { label: 'Deshacer', icon: Undo2, shortcut: 'Ctrl+Z', onSelect: () => exec('undo') },
+        { label: 'Rehacer', icon: Redo2, shortcut: 'Ctrl+Y', onSelect: () => exec('redo') },
+        { type: 'sep' },
+        { label: 'Cortar', icon: Scissors, shortcut: 'Ctrl+X', onSelect: () => exec('cut') },
+        { label: 'Copiar', icon: ClipboardCopy, shortcut: 'Ctrl+C', onSelect: () => exec('copy') },
+        { type: 'sep' },
+        { label: 'Seleccionar todo', icon: TextSelect, shortcut: 'Ctrl+A', onSelect: () => exec('selectAll') }
+      ]
+    },
+    {
+      id: 'view',
+      label: 'Ver',
+      items: [
+        { label: 'Panel', icon: LayoutDashboard, shortcut: 'Ctrl+1', onSelect: () => navigate('/') },
+        { label: 'Proyectos', icon: FolderTree, shortcut: 'Ctrl+2', onSelect: () => navigate('/proyectos') },
+        { label: 'Tareas', icon: Waypoints, shortcut: 'Ctrl+3', onSelect: () => navigate('/tareas') },
+        { label: 'Aprobaciones', icon: ShieldCheck, shortcut: 'Ctrl+4', onSelect: () => navigate('/aprobaciones') },
+        { label: 'Actividad', icon: Activity, shortcut: 'Ctrl+5', onSelect: () => navigate('/actividad') },
+        { type: 'sep' },
+        { label: 'Barra lateral', icon: PanelLeft, shortcut: 'Ctrl+B', checked: open, onSelect: toggleSidebar },
+        { label: theme === 'dark' ? 'Tema claro' : 'Tema oscuro', icon: theme === 'dark' ? Sun : Moon, onSelect: onToggleTheme },
+        { type: 'sep' },
+        { label: 'Recargar vista', icon: RotateCw, shortcut: 'Ctrl+Shift+R', onSelect: () => window.location.reload() }
+      ]
+    },
+    {
+      id: 'go',
+      label: 'Ir',
+      items: [
+        { label: 'Atrás', icon: ArrowLeft, shortcut: 'Alt+←', disabled: !canGoBack, onSelect: () => navigate(-1) },
+        { label: 'Adelante', icon: ArrowRight, shortcut: 'Alt+→', onSelect: () => navigate(1) },
+        { type: 'sep' },
+        { label: 'Inicio', icon: Home, onSelect: () => navigate('/') }
+      ]
+    },
+    {
+      id: 'help',
+      label: 'Ayuda',
+      items: [
+        {
+          label: 'Acerca de LCS',
+          icon: Info,
+          onSelect: () => toast('LCS — Layout Control System', { description: 'Gestor de layouts DWG con ramas, revisión y aprobaciones.' })
+        }
+      ]
+    }
+  ]
+
+  // Atajos globales: la ventana no tiene menú nativo, así que se resuelven aquí.
+  const shortcuts = useRef<(e: KeyboardEvent) => void>(() => {})
+  shortcuts.current = (e) => {
+    if (e.altKey && !e.ctrlKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault()
+      navigate(e.key === 'ArrowLeft' ? -1 : 1)
+      return
+    }
+    if (!e.ctrlKey || e.altKey) return
+    const key = e.key.toLowerCase()
+    if (key === 'r' && e.shiftKey) {
+      e.preventDefault()
+      window.location.reload()
+      return
+    }
+    if (e.shiftKey) return
+    const routes: Record<string, string> = { '1': '/', '2': '/proyectos', '3': '/tareas', '4': '/aprobaciones', '5': '/actividad' }
+    const action = routes[key]
+      ? () => navigate(routes[key])
+      : key === 'n'
+        ? onNewProject
+        : key === 'r'
+          ? () => void onSync()
+          : key === 'b'
+            ? toggleSidebar
+            : key === 'q'
+              ? quit
+              : null
+    if (!action) return
+    e.preventDefault()
+    action()
+  }
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => shortcuts.current(e)
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  const title = `${crumbs[crumbs.length - 1]?.label ?? 'Panel'} — Layout Control System`
+
+  return (
+    <div className="app-frame flex h-full min-w-0 flex-col">
+      <AppTitleBar menus={menus} title={title} />
+
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <Sidebar variant="sidebar" collapsible="icon">
+          <SidebarContent>
+            <SidebarGroup className="pt-3 pb-1">
+              <SidebarMenu>
+                <CreateProjectButton onClick={onNewProject} />
+              </SidebarMenu>
+            </SidebarGroup>
+
+            <SidebarGroup className="pt-0">
+              <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+              <SidebarMenu>
+                <NavItem to="/" icon={LayoutDashboard} label="Panel" end />
+                <NavItem
+                  to="/proyectos"
+                  icon={FolderTree}
+                  label="Proyectos"
+                  badge={lateZones}
+                  badgeTitle={`${lateZones} zona(s) con cambios sin integrar al master`}
+                  match={(path) => path === '/proyectos' || path.startsWith('/p/')}
+                />
+              </SidebarMenu>
+            </SidebarGroup>
+
+            <SidebarGroup className="pt-0">
+              <SidebarGroupLabel>Trabajo</SidebarGroupLabel>
+              <SidebarMenu>
+                <NavItem to="/tareas" icon={Waypoints} label="Tareas" />
+                <NavItem
+                  to="/aprobaciones"
+                  icon={ShieldCheck}
+                  label="Aprobaciones"
+                  badge={pendingApprovals}
+                  badgeTitle={`${pendingApprovals} tarea(s) esperan tu decisión`}
+                />
+              </SidebarMenu>
+            </SidebarGroup>
+
+            <SidebarGroup className="pt-0">
+              <SidebarGroupLabel>Auditoría</SidebarGroupLabel>
+              <SidebarMenu>
+                <NavItem to="/actividad" icon={Activity} label="Actividad" />
+              </SidebarMenu>
+            </SidebarGroup>
+          </SidebarContent>
+
+          <SidebarFooter>
+            {me && <IdentityChip me={me} />}
+            <FooterActions theme={theme} connected={connected} onToggleTheme={onToggleTheme} onSync={onSync} />
+          </SidebarFooter>
+        </Sidebar>
+
+        <SidebarInset>
+          <div className="app-titlebar flex h-11 shrink-0 items-center border-b px-3" onDoubleClick={() => window.go?.main?.App?.ToggleMaximise?.()}>
+            <div className="titlebar-nodrag flex items-center gap-0.5" onDoubleClick={(e) => e.stopPropagation()}>
+              <SidebarTrigger />
+              <button className="card-nav-btn" title="Atrás (Alt+←)" aria-label="Atrás" disabled={!canGoBack} onClick={() => navigate(-1)}>
+                <ArrowLeft className="size-4" />
+              </button>
+              <button className="card-nav-btn" title="Adelante (Alt+→)" aria-label="Adelante" onClick={() => navigate(1)}>
+                <ArrowRight className="size-4" />
+              </button>
+            </div>
+            <Separator orientation="vertical" className="mx-3 h-4" />
+            <nav aria-label="Ubicación" className="flex min-w-0 items-center gap-1.5 text-[12.5px]">
+              {crumbs.map((crumb, i) => {
+                const last = i === crumbs.length - 1
+                const cls = cn('truncate', last ? 'text-foreground font-medium' : 'text-muted-foreground')
+                return (
+                  <span key={i} className="flex min-w-0 items-center gap-1.5">
+                    {i > 0 && <ChevronRight className="text-muted-foreground/50 size-3.5 shrink-0" />}
+                    {crumb.to && !last ? (
+                      <Link to={crumb.to} className={cn(cls, 'hover:text-foreground titlebar-nodrag')} onDoubleClick={(e) => e.stopPropagation()}>
+                        {crumb.label}
+                      </Link>
+                    ) : (
+                      <span className={cls}>{crumb.label}</span>
+                    )}
+                  </span>
+                )
+              })}
+            </nav>
+          </div>
+          <Outlet context={{ reloadProjects }} />
+        </SidebarInset>
+      </div>
+
+    </div>
   )
 }
 
@@ -259,6 +432,7 @@ function CreateProjectButton({ onClick }: { onClick: () => void }) {
     >
       <Plus className="size-4 shrink-0" />
       <span className="sidebar-label truncate">Crear proyecto</span>
+      <kbd className="sidebar-label ml-auto font-sans text-[10.5px] font-normal opacity-70">Ctrl+N</kbd>
     </button>
   )
 }
@@ -306,15 +480,16 @@ function NavItem({
 
 function FooterActions({
   theme,
+  connected,
   onToggleTheme,
   onSync
 }: {
   theme: string
+  connected: boolean
   onToggleTheme: () => void
   onSync: () => Promise<void>
 }) {
   const { open } = useSidebar()
-  const [connected, setConnected] = useState(false)
   const [syncing, setSyncing] = useState(false)
 
   const sync = async () => {
@@ -326,10 +501,6 @@ function FooterActions({
       setSyncing(false)
     }
   }
-
-  useEffect(() => {
-    api.bootstrap().then(() => setConnected(true)).catch(() => setConnected(false))
-  }, [])
 
   return (
     <div className="sidebar-footer-actions flex min-w-0 items-center gap-1">

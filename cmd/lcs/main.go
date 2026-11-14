@@ -109,7 +109,7 @@ func main() {
 			Width: 1440, Height: 920, MinWidth: 980, MinHeight: 640,
 			Frameless:        true,
 			BackgroundColour: options.NewRGB(34, 33, 31),
-			AssetServer:      &assetserver.Options{Handler: srv.Handler()},
+			AssetServer:      &assetserver.Options{Handler: devHandler(srv.Handler())},
 			OnStartup:        app.startup,
 			Bind:             []interface{}{app},
 		}); err != nil {

@@ -44,7 +44,7 @@ export function SidebarInset({ className, ...props }: HTMLAttributes<HTMLElement
   return (
     <main
       data-slot="sidebar-inset"
-      className={cn('sidebar-inset app-main-panel my-[10px] mr-2 ml-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden', className)}
+      className={cn('sidebar-inset app-main-panel mb-2 mr-2 mt-0 ml-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden', className)}
       {...props}
     />
   )

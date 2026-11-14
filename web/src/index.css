@@ -168,12 +168,14 @@
 .app-sidebar[data-collapsible='icon'] .sidebar-footer-icon { width: 40px; height: 36px; }
 
 .sidebar-create {
-  color: var(--sidebar-foreground);
-  background: rgb(255 255 255 / 5%);
-  border: 1px solid rgb(255 255 255 / 10%);
+  color: #fff;
+  background-color: #c9633f;
+  border: 1px solid transparent;
+  box-shadow: none;
 }
-.sidebar-create:hover { background: rgb(255 255 255 / 9%); border-color: rgb(255 255 255 / 16%); }
-.sidebar-create svg { color: var(--brand); }
+.sidebar-create:hover { background-color: #d46d48; }
+.sidebar-create:active { transform: translateY(1px); }
+.sidebar-create svg { color: #fff; }
 
 .sidebar-menu-button { position: relative; }
 .sidebar-menu-button[data-active='true'] {
@@ -205,14 +207,80 @@
   --wails-draggable: drag;
   user-select: none;
 }
-.window-controls, .window-controls button { --wails-draggable: no-drag; }
+.titlebar-nodrag, .titlebar-nodrag button { --wails-draggable: no-drag; }
+
+/* Barra superior de la ventana: oscura como el marco, con menús propios. */
+.app-chrome {
+  --wails-draggable: drag;
+  user-select: none;
+  color: var(--sidebar-foreground);
+  background: var(--frame);
+}
+.chrome-menu-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: rgb(255 255 255 / 72%);
+  transition: background 100ms ease, color 100ms ease;
+}
+.chrome-menu-btn:hover, .chrome-menu-btn[data-open='true'] { background: rgb(255 255 255 / 10%); color: #fff; }
+.chrome-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  min-width: 248px;
+  padding: 4px;
+  border: 1px solid rgb(255 255 255 / 11%);
+  border-radius: 9px;
+  background: #292723;
+  box-shadow: 0 12px 36px rgb(0 0 0 / 45%), 0 2px 6px rgb(0 0 0 / 30%);
+  animation: chrome-pop 90ms ease-out;
+}
+@keyframes chrome-pop { from { opacity: 0; transform: translateY(-3px); } }
+.chrome-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: #e6e2da;
+}
+.chrome-menu-item:hover:not(:disabled) { background: rgb(255 255 255 / 9%); color: #fff; }
+.chrome-menu-item:disabled { opacity: 0.35; cursor: default; }
+.chrome-menu-danger:hover:not(:disabled) { background: #c42b1c; }
+.chrome-kbd {
+  font-family: var(--app-font-sans);
+  font-size: 11px;
+  color: rgb(255 255 255 / 40%);
+}
+.chrome-menu-item:hover .chrome-kbd { color: rgb(255 255 255 / 65%); }
+
+.app-statusbar {
+  color: rgb(255 255 255 / 50%);
+  user-select: none;
+}
+
 .window-controls button {
-  display: grid; width: 44px; height: 100%; place-items: center;
-  color: var(--muted-foreground);
+  display: grid; width: 46px; height: 100%; place-items: center;
+  color: rgb(255 255 255 / 65%);
   transition: background 120ms ease, color 120ms ease;
 }
-.window-controls button:hover { color: var(--foreground); background: var(--muted); }
+.window-controls button:hover { color: #fff; background: rgb(255 255 255 / 10%); }
 .window-controls .window-close:hover { color: white; background: #c42b1c; }
+
+.card-nav-btn {
+  display: grid; width: 28px; height: 28px; place-items: center;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  transition: background 100ms ease, color 100ms ease;
+}
+.card-nav-btn:hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
+.card-nav-btn:disabled { opacity: 0.35; cursor: default; }
 
 @layer utilities {
   .tnum {

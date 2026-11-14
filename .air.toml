@@ -1,0 +1,16 @@
+# Recarga del backend: recompila y relanza la ventana al guardar un .go
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -tags desktop,dev -o ./tmp/lcs-dev.exe ./cmd/lcs"
+  bin = "./tmp/lcs-dev.exe"
+  include_ext = ["go"]
+  exclude_dir = ["web", "tmp", "test", "build", "tools", "internal/webui"]
+  exclude_regex = ['_test.go']
+  delay = 400
+  kill_delay = "500ms"
+  send_interrupt = false
+
+[log]
+  time = false
