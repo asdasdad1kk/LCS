@@ -154,8 +154,8 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) error {
 
 	if seed := a.svc.Config().SeedDir; seed != "" {
 		_, _ = a.svc.Seed(p.ID, seed)
+		_ = a.svc.Sync(p.ID)
 	}
-	_ = a.svc.Sync(p.ID)
 	writeJSON(w, 201, p)
 	return nil
 }

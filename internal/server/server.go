@@ -80,6 +80,9 @@ func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ct
 
 func (s *Server) Service() *app.Service { return s.svc }
 
+// Handler exposes the same API and embedded SPA to a native WebView host.
+func (s *Server) Handler() http.Handler { return s.logged(s.mux) }
+
 func (s *Server) logged(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

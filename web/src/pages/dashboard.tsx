@@ -87,7 +87,7 @@ export function DashboardPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 px-6 pb-6 lg:grid-cols-4">
-        <Metric icon={Boxes} label="Proyectos" value={totals.drawings ? projects.length : projects.length} />
+        <Metric icon={Boxes} label="Proyectos" value={projects.length} />
         <Metric icon={FileBox} label="Planos" value={totals.drawings} />
         <Metric icon={GitBranch} label="Ramas activas" value={totals.open} />
         <Metric icon={LayoutTemplate} label="Para revisar" value={totals.review} tone="warning" />

@@ -3,21 +3,66 @@
 package tray
 
 import (
-	"fmt"
-	"os/exec"
+	"syscall"
+	"unsafe"
 
 	"github.com/energye/systray"
 )
 
+var (
+	shell32          = syscall.NewLazyDLL("shell32.dll")
+	user32           = syscall.NewLazyDLL("user32.dll")
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
+	shellExecuteW    = shell32.NewProc("ShellExecuteW")
+	openClipboard    = user32.NewProc("OpenClipboard")
+	closeClipboard   = user32.NewProc("CloseClipboard")
+	emptyClipboard   = user32.NewProc("EmptyClipboard")
+	setClipboardData = user32.NewProc("SetClipboardData")
+	globalAlloc      = kernel32.NewProc("GlobalAlloc")
+	globalLock       = kernel32.NewProc("GlobalLock")
+	globalUnlock     = kernel32.NewProc("GlobalUnlock")
+	globalFree       = kernel32.NewProc("GlobalFree")
+)
+
 // OpenBrowser sends the URL to the default handler without flashing a console.
 func OpenBrowser(url string) {
-	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	verb, err := syscall.UTF16PtrFromString("open")
+	if err != nil {
+		return
+	}
+	target, err := syscall.UTF16PtrFromString(url)
+	if err != nil {
+		return
+	}
+	shellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
 }
 
-// CopyToClipboard uses the PowerShell clipboard cmdlet (no cgo, no Win32 glue).
+// CopyToClipboard writes Unicode text directly to the Windows clipboard.
 func CopyToClipboard(text string) {
-	_ = exec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden",
-		"-Command", fmt.Sprintf("Set-Clipboard -Value %q", text)).Start()
+	value, err := syscall.UTF16FromString(text)
+	if err != nil {
+		return
+	}
+	if opened, _, _ := openClipboard.Call(0); opened == 0 {
+		return
+	}
+	defer closeClipboard.Call()
+	emptyClipboard.Call()
+
+	handle, _, _ := globalAlloc.Call(0x0002, uintptr(len(value)*2)) // GMEM_MOVEABLE
+	if handle == 0 {
+		return
+	}
+	locked, _, _ := globalLock.Call(handle)
+	if locked == 0 {
+		globalFree.Call(handle)
+		return
+	}
+	copy(unsafe.Slice((*uint16)(unsafe.Pointer(locked)), len(value)), value)
+	globalUnlock.Call(handle)
+	if result, _, _ := setClipboardData.Call(13, handle); result == 0 { // CF_UNICODETEXT
+		globalFree.Call(handle)
+	}
 }
 
 // Run starts the notification-area icon and blocks until the user quits.

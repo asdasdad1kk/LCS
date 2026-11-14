@@ -16,7 +16,19 @@ import (
 	"lcs/internal/server"
 	"lcs/internal/store"
 	"lcs/internal/tray"
+
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+type App struct{ ctx context.Context }
+
+func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) Minimise()                   { runtime.WindowMinimise(a.ctx) }
+func (a *App) ToggleMaximise()             { runtime.WindowToggleMaximise(a.ctx) }
+func (a *App) Quit()                       { runtime.Quit(a.ctx) }
 
 func main() {
 	var (
@@ -26,6 +38,9 @@ func main() {
 		headless = flag.Bool("headless", false, "solo servidor, sin bandeja ni navegador")
 	)
 	flag.Parse()
+	if err := config.LoadDotEnv(); err != nil {
+		fatal(err)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -60,7 +75,8 @@ func main() {
 	}
 	if alreadyRunning {
 		slog.Info("LCS ya está en ejecución en este puerto", "url", cfg.LocalURL())
-		if !*headless {
+		// Do not launch another browser process for accidental duplicate starts.
+		if *open && !*headless {
 			tray.OpenBrowser(cfg.LocalURL())
 		}
 		return
@@ -87,7 +103,18 @@ func main() {
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 	} else {
-		tray.Run(func() { tray.OpenBrowser(cfg.LocalURL()) }, func() {})
+		app := &App{}
+		if err := wails.Run(&options.App{
+			Title: "LCS — Layout Control System",
+			Width: 1440, Height: 920, MinWidth: 980, MinHeight: 640,
+			Frameless:        true,
+			BackgroundColour: options.NewRGB(34, 33, 31),
+			AssetServer:      &assetserver.Options{Handler: srv.Handler()},
+			OnStartup:        app.startup,
+			Bind:             []interface{}{app},
+		}); err != nil {
+			slog.Error("ventana LCS", "err", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)

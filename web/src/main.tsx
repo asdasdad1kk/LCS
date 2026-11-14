@@ -6,6 +6,16 @@ import App from './App'
 import { ThemeProvider } from '@/components/theme-provider'
 import './index.css'
 
+declare global {
+  interface Window {
+    go?: { main?: { App?: {
+      Minimise?: () => void
+      ToggleMaximise?: () => void
+      Quit?: () => void
+    } } }
+  }
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeProvider>

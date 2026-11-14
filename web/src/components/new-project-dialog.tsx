@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { FolderPlus, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, type Project } from '@/lib/api'
@@ -26,9 +26,11 @@ export function NewProjectDialog({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
+  const submitting = useRef(false)
 
   const submit = async () => {
-    if (!name.trim()) return
+    if (!name.trim() || submitting.current) return
+    submitting.current = true
     setBusy(true)
     try {
       const p = await api.createProject({ name: name.trim(), description: description.trim() })
@@ -40,6 +42,7 @@ export function NewProjectDialog({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'no pude crear el proyecto')
     } finally {
+      submitting.current = false
       setBusy(false)
     }
   }

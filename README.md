@@ -1,7 +1,7 @@
 # LCS — Layout Control System
 
-Gestor de layouts DWG para estudio. Un solo `.exe`: servidor local, bandeja del
-sistema y panel en el navegador. El trabajo real ocurre en **ramas**: se descarga
+Gestor de layouts DWG para estudio. Un solo `.exe`: servidor local y ventana
+nativa frameless con controles propios. El trabajo real ocurre en **ramas**: se descarga
 el plano, se edita en AutoCAD, se vuelve a subir y recién ahí se integra a `main`.
 
 ```
@@ -29,9 +29,10 @@ pasa por una rama revisable.
 
 ## Instalación
 
-1. Copiar `LCS.exe` a la máquina.
-2. Decirle dónde vive el workspace (ver abajo).
-3. Doble clic. Aparece el icono en la bandeja y se abre el navegador.
+1. Copiar `LCS.exe` y `.env` a la máquina.
+2. Editar `LCS_WORKSPACE` en `.env` con la carpeta de proyectos. Si las herramientas no están en `PATH`, también definir `GO_BIN`, `NODE_BIN` y `NPM_BIN` antes de compilar.
+3. Doble clic. Se abre la ventana de LCS; la interfaz funciona dentro de una
+   WebView de Wails y la API permanece disponible en `127.0.0.1`.
 
 ### Dónde vive el workspace
 
@@ -171,18 +172,13 @@ a otro proyecto.
 
 ## Compilar
 
-Requiere Go 1.24+ y Node 20+. **No** requiere gcc (`CGO_ENABLED=0`).
+Requiere Go 1.24+ y Node 20+. Configura las rutas en `.env`; el build las
+usa para encontrar Go, Node y npm, y el ejecutable las usa para cargar el
+workspace y las rutas de datos. Puedes copiar `.env.example` como base.
 
 ```powershell
-# 1. frontend -> internal/webui/dist (queda embebido con go:embed)
-cd web
-npm install
-npm run build
-cd ..
-
-# 2. binario único, sin consola
-$env:CGO_ENABLED = '0'
-go build -trimpath -ldflags="-s -w -H windowsgui" -o LCS.exe ./cmd/lcs
+# Compila el frontend y el ejecutable Wails frameless
+.\build.ps1
 ```
 
 El primer `npm install` trae los workers de LibreDWG y las fuentes curadas
@@ -191,8 +187,8 @@ El primer `npm install` trae los workers de LibreDWG y las fuentes curadas
 ### Modo consola (desarrollo)
 
 ```powershell
-go run ./cmd/lcs --headless -v        # solo servidor, logs a consola
-go run ./cmd/lcs --open               # con bandeja y navegador
+go run -tags "desktop,production" ./cmd/lcs --headless -v  # servidor, logs a consola
+go run -tags "desktop,production" ./cmd/lcs --open         # ventana y navegador
 ```
 
 Flags: `--headless` (sin bandeja ni navegador), `--no-tray`, `--open`, `-v`.
