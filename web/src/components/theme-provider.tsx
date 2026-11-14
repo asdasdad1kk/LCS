@@ -1,12 +1,15 @@
 import * as React from 'react'
 
 type Mode = 'light' | 'dark'
-export type Palette = 'default' | 'windows' | 'glass' | 'plano'
+/** Fondo de la ventana nativa: opaca o Acrylic. */
+export type Backdrop = 'off' | 'acrylic'
+export type Palette = 'default' | 'windows' | 'glass' | 'plano' | 'obsidian'
 
 export const PALETTES: { id: Palette; name: string; description: string }[] = [
   { id: 'default', name: 'Default', description: 'Crema cálido y terracota. El tema por defecto.' },
   { id: 'windows', name: 'Windows moderno', description: 'Fluent: superficies planas, azul de sistema y esquinas suaves.' },
   { id: 'glass', name: 'Cristal', description: 'Glassmorphism: paneles translúcidos con desenfoque sobre un degradado.' },
+  { id: 'obsidian', name: 'Obsidiana', description: 'Vidrio ahumado con acento naranja y navegación flotante.' },
   { id: 'plano', name: 'Plano técnico', description: 'Pizarra azulada con acento petróleo.' }
 ]
 
@@ -44,6 +47,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const stored = read('lcs-palette')
     return PALETTES.some((p) => p.id === stored) ? (stored as Palette) : 'default'
   })
+
+  // Fondo de la ventana (off | acrylic): lo reporta Wails según cómo arrancó.
+  React.useEffect(() => {
+    const state = window.go?.main?.App?.WindowBackdrop?.()
+    if (state) void state.then((r) => (document.documentElement.dataset.acrylic = r.active)).catch(() => {})
+  }, [])
 
   React.useEffect(() => {
     const root = document.documentElement

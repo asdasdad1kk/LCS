@@ -340,6 +340,98 @@
   --panel-border: oklch(1 0 0 / 0.14);
   --panel-shadow: 0 10px 40px oklch(0 0 0 / 0.35), 0 1px 0 oklch(1 0 0 / 0.1) inset;
 }
+/* Obsidiana: vidrio ahumado sobre un fondo cálido; navegación flotante. */
+:root[data-palette='obsidian'] {
+  --background: oklch(0.95 0.012 70);
+  --foreground: oklch(0.25 0.02 55);
+  --card: oklch(1 0 0 / 0.5);
+  --card-foreground: oklch(0.25 0.02 55);
+  --popover: oklch(0.98 0.008 70 / 0.92);
+  --popover-foreground: oklch(0.25 0.02 55);
+  --primary: oklch(0.64 0.17 50);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.3 0.02 55 / 0.07);
+  --secondary-foreground: oklch(0.3 0.02 55);
+  --muted: oklch(0.3 0.02 55 / 0.06);
+  --muted-foreground: oklch(0.5 0.02 55);
+  --accent: oklch(0.64 0.17 50 / 0.14);
+  --accent-foreground: oklch(0.3 0.08 50);
+  --destructive: oklch(0.58 0.21 27);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.3 0.02 55 / 0.12);
+  --input: oklch(0.3 0.02 55 / 0.22);
+  --ring: oklch(0.64 0.17 50);
+  --chart-1: oklch(0.64 0.17 50);
+  --chart-2: oklch(0.65 0.12 190);
+  --chart-3: oklch(0.78 0.14 85);
+  --chart-4: oklch(0.6 0.15 20);
+  --chart-5: oklch(0.55 0.1 60);
+  --success: oklch(0.6 0.12 180);
+  --warning: oklch(0.7 0.15 75);
+  --sidebar: oklch(1 0 0 / 0.45);
+  --sidebar-foreground: oklch(0.3 0.02 55);
+  --sidebar-primary: oklch(0.64 0.17 50);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.64 0.17 50 / 0.16);
+  --sidebar-accent-foreground: oklch(0.3 0.08 50);
+  --sidebar-border: oklch(0.3 0.02 55 / 0.1);
+  --sidebar-ring: oklch(0.64 0.17 50);
+  --radius: 1rem;
+  --frame-bg: radial-gradient(900px 600px at 90% 100%, oklch(0.82 0.12 60 / 0.9), transparent 62%), radial-gradient(700px 500px at 5% 100%, oklch(0.88 0.06 75 / 0.9), transparent 60%), radial-gradient(800px 500px at 25% -5%, oklch(0.9 0.04 200 / 0.8), transparent 60%), oklch(0.94 0.015 70);
+  --frame-bg-acrylic: radial-gradient(900px 600px at 90% 100%, oklch(0.84 0.1 60 / 0.7), transparent 62%), radial-gradient(800px 500px at 20% -5%, oklch(0.92 0.04 200 / 0.6), transparent 60%), oklch(0.96 0.012 70 / 0.82);
+  --panel-bg: oklch(1 0 0 / 0.5);
+  --sidebar-bg: oklch(1 0 0 / 0.45);
+  --chrome-bg: oklch(1 0 0 / 0.5);
+  --titlebar-bg: oklch(1 0 0 / 0.35);
+  --glass-blur: blur(30px) saturate(1.6);
+  --panel-border-w: 1px;
+  --panel-border: oklch(1 0 0 / 0.65);
+  --panel-shadow: 0 10px 40px oklch(0.4 0.08 55 / 0.16), 0 1px 0 oklch(1 0 0 / 0.8) inset;
+}
+:root[data-palette='obsidian'].dark {
+  --background: oklch(0.2 0.008 55);
+  --foreground: oklch(0.95 0.008 70);
+  --card: oklch(1 0 0 / 0.06);
+  --card-foreground: oklch(0.96 0.008 70);
+  --popover: oklch(0.26 0.01 55 / 0.92);
+  --popover-foreground: oklch(0.95 0.008 70);
+  --primary: oklch(0.72 0.17 55);
+  --primary-foreground: oklch(0.18 0.02 55);
+  --secondary: oklch(1 0 0 / 0.08);
+  --secondary-foreground: oklch(0.94 0.008 70);
+  --muted: oklch(1 0 0 / 0.06);
+  --muted-foreground: oklch(0.76 0.01 70);
+  --accent: oklch(1 0 0 / 0.1);
+  --accent-foreground: oklch(0.98 0.005 70);
+  --destructive: oklch(0.68 0.2 27);
+  --border: oklch(1 0 0 / 0.12);
+  --input: oklch(1 0 0 / 0.2);
+  --ring: oklch(0.72 0.17 55);
+  --chart-1: oklch(0.72 0.17 55);
+  --chart-2: oklch(0.76 0.12 185);
+  --chart-3: oklch(0.84 0.14 85);
+  --chart-4: oklch(0.7 0.15 20);
+  --chart-5: oklch(0.6 0.1 60);
+  --success: oklch(0.78 0.13 178);
+  --warning: oklch(0.84 0.14 85);
+  --sidebar: oklch(0.3 0.008 60 / 0.45);
+  --sidebar-foreground: oklch(0.93 0.008 70);
+  --sidebar-primary: oklch(0.72 0.17 55);
+  --sidebar-primary-foreground: oklch(0.18 0.02 55);
+  --sidebar-accent: oklch(0.72 0.17 55 / 0.2);
+  --sidebar-accent-foreground: oklch(0.98 0.02 70);
+  --sidebar-border: oklch(1 0 0 / 0.1);
+  --sidebar-ring: oklch(0.72 0.17 55);
+  --frame-bg: radial-gradient(900px 620px at 88% 100%, oklch(0.52 0.15 52 / 0.8), transparent 62%), radial-gradient(700px 500px at 8% 100%, oklch(0.38 0.07 60 / 0.75), transparent 60%), radial-gradient(800px 500px at 22% -5%, oklch(0.3 0.03 200 / 0.6), transparent 60%), oklch(0.16 0.008 55);
+  --frame-bg-acrylic: radial-gradient(900px 620px at 88% 100%, oklch(0.52 0.15 52 / 0.4), transparent 62%), oklch(0.16 0.008 55 / 0.4);
+  --panel-bg: oklch(0.3 0.008 60 / 0.5);
+  --sidebar-bg: oklch(0.3 0.008 60 / 0.42);
+  --chrome-bg: oklch(0.3 0.008 60 / 0.5);
+  --titlebar-bg: oklch(1 0 0 / 0.04);
+  --panel-border: oklch(1 0 0 / 0.14);
+  --panel-shadow: 0 14px 44px oklch(0 0 0 / 0.4), 0 1px 0 oklch(1 0 0 / 0.1) inset;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -573,6 +665,55 @@
 }
 .card-nav-btn:hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
 .card-nav-btn:disabled { opacity: 0.35; cursor: default; }
+
+
+/* --------------------------------------------------- Obsidiana: navegación flotante */
+:root[data-palette='obsidian'] .app-chrome {
+  margin: 10px 12px 0;
+  border-radius: 16px;
+  border: 1px solid var(--panel-border);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--panel-shadow);
+}
+:root[data-palette='obsidian'] .app-body { padding: 10px 12px 12px; gap: 10px; }
+:root[data-palette='obsidian'] .app-sidebar {
+  border-radius: 22px;
+  border: 1px solid var(--panel-border);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--panel-shadow);
+}
+:root[data-palette='obsidian'] .app-sidebar[data-state='collapsed'] { border-radius: 32px; align-self: center; height: auto; max-height: 100%; }
+:root[data-palette='obsidian'] .app-main-panel { margin: 0 !important; }
+
+/* Con la barra contraída, los ítems son círculos y el activo se pinta con el acento. */
+:root[data-palette='obsidian'] .app-sidebar[data-collapsible='icon'] [data-slot='sidebar-menu-button'] {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+}
+:root[data-palette='obsidian'] .app-sidebar[data-collapsible='icon'] .sidebar-menu-button[data-active='true'] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: 0 6px 18px color-mix(in oklch, var(--primary) 45%, transparent);
+}
+:root[data-palette='obsidian'] .app-sidebar[data-collapsible='icon'] .sidebar-create {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+}
+:root[data-palette='obsidian'] .sidebar-menu-button { border-radius: 12px; }
+
+/* ----------------------------------------------- Transparencia real de la ventana */
+:root[data-acrylic='acrylic'],
+:root[data-acrylic='acrylic'] body,
+:root[data-acrylic='acrylic'] #root { background: transparent; }
+:root[data-acrylic='acrylic'] .app-frame {
+  background: var(--frame-bg-acrylic, color-mix(in oklch, var(--frame) 55%, transparent));
+}
+/* En claro, el desenfoque sobre un escritorio oscuro se ve sucio: marco casi opaco. */
+:root[data-acrylic='acrylic']:not(.dark) .app-frame {
+  background: var(--frame-bg-acrylic, color-mix(in oklch, var(--frame) 88%, transparent));
+}
 
 @layer utilities {
   .tnum {

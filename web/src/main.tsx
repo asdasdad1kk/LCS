@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import App from './App'
-import { ThemeProvider } from '@/components/theme-provider'
+import { ThemeProvider, type Backdrop } from '@/components/theme-provider'
 import './index.css'
 
 declare global {
@@ -12,6 +12,9 @@ declare global {
       Minimise?: () => void
       ToggleMaximise?: () => void
       Quit?: () => void
+      Restart?: () => Promise<void>
+      WindowBackdrop?: () => Promise<{ active: Backdrop; pref: Backdrop }>
+      SetWindowBackdrop?: (mode: Backdrop) => Promise<void>
     } } }
     runtime?: { WindowIsMaximised?: () => Promise<boolean> }
   }

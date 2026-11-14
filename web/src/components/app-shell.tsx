@@ -180,7 +180,14 @@ function ShellBody({
   reloadProjects,
   navigate
 }: ShellBodyProps) {
-  const { toggle: toggleSidebar, open } = useSidebar()
+  const { toggle: toggleSidebar, setOpen, open } = useSidebar()
+  const { palette } = useTheme()
+  // Al elegir Obsidiana la barra pasa a ser la píldora flotante de iconos.
+  const lastPalette = useRef(palette)
+  useEffect(() => {
+    if (palette === 'obsidian' && lastPalette.current !== 'obsidian') setOpen(false)
+    lastPalette.current = palette
+  }, [palette, setOpen])
   const quit = () => window.go?.main?.App?.Quit?.()
   const exec = (cmd: string) => document.execCommand(cmd)
 
@@ -192,6 +199,7 @@ function ShellBody({
         { label: 'Nuevo proyecto…', icon: FolderPlus, shortcut: 'Ctrl+N', onSelect: onNewProject },
         { label: 'Sincronizar con el NAS', icon: RefreshCw, shortcut: 'Ctrl+R', onSelect: () => void onSync() },
         { type: 'sep' },
+        { label: 'Reiniciar LCS', icon: RotateCw, onSelect: () => void window.go?.main?.App?.Restart?.() },
         { label: 'Salir', icon: LogOut, shortcut: 'Ctrl+Q', danger: true, onSelect: quit }
       ]
     },
@@ -294,7 +302,7 @@ function ShellBody({
     <div className="app-frame flex h-full min-w-0 flex-col">
       <AppTitleBar menus={menus} title={title} />
 
-      <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="app-body flex min-h-0 min-w-0 flex-1">
         <Sidebar variant="sidebar" collapsible="icon" >
           <SidebarContent>
             <SidebarGroup className="pt-3 pb-1">

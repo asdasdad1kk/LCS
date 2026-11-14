@@ -3,12 +3,12 @@ import { Slot } from '@radix-ui/react-slot'
 import { PanelLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-type SidebarContextValue = { open: boolean; toggle: () => void }
+type SidebarContextValue = { open: boolean; toggle: () => void; setOpen: (open: boolean) => void }
 const SidebarContext = createContext<SidebarContextValue | null>(null)
 
 export function SidebarProvider({ children, defaultOpen = true }: { children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
-  return <SidebarContext.Provider value={{ open, toggle: () => setOpen((value) => !value) }}>{children}</SidebarContext.Provider>
+  return <SidebarContext.Provider value={{ open, toggle: () => setOpen((value) => !value), setOpen }}>{children}</SidebarContext.Provider>
 }
 
 export function useSidebar() {
