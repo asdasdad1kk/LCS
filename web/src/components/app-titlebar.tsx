@@ -63,7 +63,7 @@ export function AppTitleBar({ menus, title }: { menus: MenuDef[]; title: string 
     >
       <div className="flex shrink-0 items-center gap-2 pr-2 pl-3.5">
         <Logo className="size-5" />
-        <span className="text-[12.5px] font-semibold tracking-tight text-white/90">LCS</span>
+        <span className="text-[12.5px] font-semibold tracking-tight text-sidebar-foreground/90">LCS</span>
       </div>
 
       <nav className="titlebar-nodrag flex items-center gap-0.5" aria-label="Menú principal" onDoubleClick={(e) => e.stopPropagation()}>
@@ -82,7 +82,7 @@ export function AppTitleBar({ menus, title }: { menus: MenuDef[]; title: string 
               <div role="menu" className="chrome-menu" onMouseDown={(e) => e.preventDefault()}>
                 {menu.items.map((item, i) =>
                   item.type === 'sep' ? (
-                    <div key={i} className="my-1 h-px bg-white/10" />
+                    <div key={i} className="my-1 h-px bg-sidebar-foreground/10" />
                   ) : (
                     <button
                       key={i}
@@ -109,7 +109,7 @@ export function AppTitleBar({ menus, title }: { menus: MenuDef[]; title: string 
         ))}
       </nav>
 
-      <div className="pointer-events-none min-w-0 flex-1 truncate px-4 text-center text-[12px] text-white/45">{title}</div>
+      <div className="pointer-events-none min-w-0 flex-1 truncate px-4 text-center text-[12px] text-sidebar-foreground/45">{title}</div>
 
       <div className="window-controls titlebar-nodrag flex h-full shrink-0 items-center" onDoubleClick={(e) => e.stopPropagation()}>
         <button aria-label="Minimizar" title="Minimizar" onClick={() => win()?.Minimise?.()}>

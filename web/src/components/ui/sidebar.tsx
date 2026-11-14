@@ -69,7 +69,7 @@ export function SidebarTrigger({ className, ...props }: ButtonHTMLAttributes<HTM
 }
 
 export function SidebarHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div data-slot="sidebar-header" className={cn('sidebar-header flex h-14 shrink-0 items-center gap-2.5 border-b border-white/[0.06] px-4', className)} {...props} />
+  return <div data-slot="sidebar-header" className={cn('sidebar-header flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-foreground/[0.06] px-4', className)} {...props} />
 }
 
 export function SidebarContent({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
@@ -77,7 +77,7 @@ export function SidebarContent({ className, ...props }: HTMLAttributes<HTMLDivEl
 }
 
 export function SidebarFooter({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div data-slot="sidebar-footer" className={cn('sidebar-footer shrink-0 border-t border-white/[0.06] p-2', className)} {...props} />
+  return <div data-slot="sidebar-footer" className={cn('sidebar-footer shrink-0 border-t border-sidebar-foreground/[0.06] p-2', className)} {...props} />
 }
 
 export function SidebarGroup({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
@@ -85,11 +85,11 @@ export function SidebarGroup({ className, ...props }: HTMLAttributes<HTMLDivElem
 }
 
 export function SidebarGroupLabel({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div data-slot="sidebar-group-label" className={cn('sidebar-label px-2.5 pb-2 pt-3 text-[10px] font-semibold tracking-[0.12em] text-white/45 uppercase', className)} {...props} />
+  return <div data-slot="sidebar-group-label" className={cn('sidebar-label px-2.5 pb-2 pt-3 text-[10px] font-semibold tracking-[0.12em] text-sidebar-foreground/45 uppercase', className)} {...props} />
 }
 
 export function SidebarGroupAction({ className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button data-slot="sidebar-group-action" className={cn('sidebar-group-action grid size-8 shrink-0 place-items-center rounded-md text-white/55 transition-colors hover:bg-white/[0.07] hover:text-white', className)} {...props} />
+  return <button data-slot="sidebar-group-action" className={cn('sidebar-group-action grid size-8 shrink-0 place-items-center rounded-md text-sidebar-foreground/55 transition-colors hover:bg-sidebar-foreground/[0.07] hover:text-sidebar-foreground', className)} {...props} />
 }
 
 export function SidebarMenu({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
@@ -112,7 +112,7 @@ export function SidebarMenuButton({
       data-active={isActive}
       data-size="default"
       title={!open ? tooltip : undefined}
-      className={cn('sidebar-menu-button flex h-9 w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-md px-2.5 text-left text-[13px] text-[#d1cdc6] transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary', className)}
+      className={cn('sidebar-menu-button flex h-9 w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-md px-2.5 text-left text-[13px] text-sidebar-foreground/80 transition-colors hover:bg-sidebar-foreground/[0.06] hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary', className)}
       {...props}
     >
       {children}

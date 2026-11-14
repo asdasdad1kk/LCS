@@ -285,7 +285,7 @@ function ShellBody({
       <AppTitleBar menus={menus} title={title} />
 
       <div className="flex min-h-0 min-w-0 flex-1">
-        <Sidebar variant="sidebar" collapsible="icon">
+        <Sidebar variant="sidebar" collapsible="icon" >
           <SidebarContent>
             <SidebarGroup className="pt-3 pb-1">
               <SidebarMenu>
@@ -336,7 +336,7 @@ function ShellBody({
           </SidebarFooter>
         </Sidebar>
 
-        <SidebarInset>
+        <SidebarInset >
           <div className="app-titlebar flex h-11 shrink-0 items-center border-b px-3" onDoubleClick={() => window.go?.main?.App?.ToggleMaximise?.()}>
             <div className="titlebar-nodrag flex items-center gap-0.5" onDoubleClick={(e) => e.stopPropagation()}>
               <SidebarTrigger />
@@ -408,14 +408,14 @@ function IdentityChip({ me }: { me: Identity }) {
       title={hint}
       className="sidebar-footer-status mb-1 flex h-10 min-w-0 items-center gap-2.5 overflow-hidden rounded-md px-2 text-left"
     >
-      <span className="relative grid size-6 shrink-0 place-items-center rounded-full bg-white/10 text-[10px] font-semibold text-white/80">
+      <span className="relative grid size-6 shrink-0 place-items-center rounded-full bg-sidebar-foreground/10 text-[10px] font-semibold text-sidebar-foreground/80">
         {initials(me.name) || '?'}
         {!me.verified && <span className="bg-warning absolute -right-0.5 -bottom-0.5 size-2 rounded-full" />}
       </span>
       {open && (
         <span className="sidebar-label min-w-0 flex-1 leading-tight">
-          <span className="block truncate text-[12px] text-white/85">{me.name}</span>
-          <span className="block truncate text-[10.5px] text-white/45">{me.email}</span>
+          <span className="block truncate text-[12px] text-sidebar-foreground/85">{me.name}</span>
+          <span className="block truncate text-[10.5px] text-sidebar-foreground/45">{me.email}</span>
         </span>
       )}
     </div>
@@ -507,9 +507,9 @@ function FooterActions({
       <button
         type="button"
         title={open ? (connected ? 'Conectado' : 'Sin conexión') : 'Estado de conexión'}
-        className="sidebar-footer-status flex h-9 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-md px-2 text-left text-xs text-white/60 hover:bg-white/[0.06] hover:text-white"
+        className="sidebar-footer-status flex h-9 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-md px-2 text-left text-xs text-sidebar-foreground/60 hover:bg-sidebar-foreground/[0.06] hover:text-sidebar-foreground"
       >
-        <span className={cn('size-2 shrink-0 rounded-full', connected ? 'bg-success' : 'bg-white/25')} />
+        <span className={cn('size-2 shrink-0 rounded-full', connected ? 'bg-success' : 'bg-sidebar-foreground/25')} />
         <span className="sidebar-label truncate">{connected ? 'Conectado' : 'Desconectado'}</span>
       </button>
       <FooterIcon title="Cambiar tema" onClick={onToggleTheme}>
@@ -524,7 +524,7 @@ function FooterActions({
 
 function FooterIcon({ title, onClick, children, disabled }: { title: string; onClick: () => void; children: React.ReactNode; disabled?: boolean }) {
   return (
-    <Button type="button" variant="ghost" size="icon-sm" title={title} aria-label={title} onClick={onClick} disabled={disabled} className="sidebar-footer-icon shrink-0 text-white/65 hover:bg-white/[0.08] hover:text-white">
+    <Button type="button" variant="ghost" size="icon-sm" title={title} aria-label={title} onClick={onClick} disabled={disabled} className="sidebar-footer-icon shrink-0 text-sidebar-foreground/65 hover:bg-sidebar-foreground/[0.08] hover:text-sidebar-foreground">
       {children}
     </Button>
   )
