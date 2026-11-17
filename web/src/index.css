@@ -286,6 +286,7 @@
   --radius: 0.875rem;
   --app-font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
   --frame-bg: radial-gradient(900px 600px at 6% -5%, oklch(0.86 0.09 250), transparent 62%), radial-gradient(800px 560px at 100% 15%, oklch(0.88 0.09 330), transparent 58%), radial-gradient(900px 640px at 35% 115%, oklch(0.9 0.08 195), transparent 60%), oklch(0.95 0.02 255);
+  --frame-bg-acrylic: radial-gradient(900px 600px at 6% -5%, oklch(0.88 0.08 250 / 0.9), transparent 62%), radial-gradient(800px 560px at 100% 15%, oklch(0.9 0.08 330 / 0.8), transparent 58%), oklch(0.97 0.012 255 / 0.84);
   --panel-bg: oklch(1 0 0 / 0.55);
   --sidebar-bg: transparent;
   --chrome-bg: transparent;
@@ -296,6 +297,8 @@
   --panel-shadow: 0 8px 32px oklch(0.3 0.08 262 / 0.14), 0 1px 0 oklch(1 0 0 / 0.8) inset;
 }
 :root[data-palette='glass'].dark {
+  /* sin esto heredaba el marco pastel del modo claro y el texto claro no se leía */
+  --frame-bg-acrylic: color-mix(in oklch, var(--frame) 55%, transparent);
   --background: oklch(0.2 0.03 270);
   --foreground: oklch(0.96 0.005 262);
   --card: oklch(1 0 0 / 0.07);
@@ -669,11 +672,12 @@
 
 /* --------------------------------------------------- Obsidiana: navegación flotante */
 :root[data-palette='obsidian'] .app-chrome {
-  margin: 10px 12px 0;
+  /* margin: 10px 12px 0;
   border-radius: 16px;
   border: 1px solid var(--panel-border);
   backdrop-filter: var(--glass-blur);
-  box-shadow: var(--panel-shadow);
+  box-shadow: var(--panel-shadow); */
+  background: transparent;
 }
 :root[data-palette='obsidian'] .app-body { padding: 10px 12px 12px; gap: 10px; }
 :root[data-palette='obsidian'] .app-sidebar {
@@ -712,7 +716,7 @@
 }
 /* En claro, el desenfoque sobre un escritorio oscuro se ve sucio: marco casi opaco. */
 :root[data-acrylic='acrylic']:not(.dark) .app-frame {
-  background: var(--frame-bg-acrylic, color-mix(in oklch, var(--frame) 88%, transparent));
+  background: var(--frame-bg-acrylic, color-mix(in oklch, var(--background) 86%, transparent));
 }
 
 @layer utilities {

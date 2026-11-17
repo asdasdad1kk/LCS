@@ -24,3 +24,4 @@ Thumbs.db
 
 # dev
 /tmp/
+/cmd/installer/payload/lcs.exe.gz

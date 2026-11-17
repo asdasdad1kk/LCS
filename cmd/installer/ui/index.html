@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Instalador de LCS</title>
+<style>
+  :root {
+    --bg: #1a1714; --panel: rgb(255 255 255 / 0.06); --line: rgb(255 255 255 / 0.12);
+    --fg: #f3ece4; --muted: #a79d92; --accent: #f59a3b; --accent-fg: #2a1a08; --ok: #4fd1b5;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font: 14px/1.45 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+    color: var(--fg); overflow: hidden; user-select: none;
+    background:
+      radial-gradient(520px 360px at 92% 105%, rgb(245 154 59 / 0.42), transparent 62%),
+      radial-gradient(420px 300px at 0% 105%, rgb(140 90 50 / 0.35), transparent 60%),
+      radial-gradient(460px 300px at 15% -10%, rgb(70 110 120 / 0.35), transparent 60%),
+      var(--bg);
+  }
+  .bar { height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 6px 0 18px; --wails-draggable: drag; }
+  .bar .t { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 8px; }
+  .bar button { --wails-draggable: no-drag; width: 40px; height: 32px; border: 0; background: none; color: var(--muted); border-radius: 8px; font-size: 15px; cursor: pointer; }
+  .bar button:hover { background: rgb(255 255 255 / 0.08); color: #fff; }
+  .bar button.x:hover { background: #c42b1c; }
+  main { padding: 6px 34px 28px; height: calc(100% - 40px); display: flex; flex-direction: column; }
+  .screen { display: none; flex: 1; flex-direction: column; animation: in 220ms ease-out; }
+  .screen.on { display: flex; }
+  @keyframes in { from { opacity: 0; transform: translateY(6px); } }
+  .logo { width: 46px; height: 46px; margin-bottom: 14px; }
+  h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin-top: 4px; }
+  .field { margin-top: 18px; }
+  .field label { display: block; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .row { display: flex; gap: 8px; }
+  .path { flex: 1; min-width: 0; padding: 9px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+  .btn { height: 38px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: inherit; cursor: pointer; transition: background 120ms; }
+  .btn:hover { background: rgb(255 255 255 / 0.11); }
+  .btn.primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); font-weight: 600; padding: 0 26px; }
+  .btn.primary:hover { background: #ffab57; }
+  .btn.danger { background: #c9432f; border-color: transparent; color: #fff; font-weight: 600; padding: 0 26px; }
+  .check { display: flex; align-items: center; gap: 10px; margin-top: 16px; cursor: pointer; }
+  .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .note { color: var(--muted); font-size: 12px; }
+  .center { align-items: center; justify-content: center; text-align: center; }
+  .track { width: 100%; height: 8px; border-radius: 99px; background: var(--panel); overflow: hidden; margin-top: 26px; border: 1px solid var(--line); }
+  .fill { height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, #e8821f, var(--accent)); transition: width 260ms ease; }
+  .badge { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: rgb(79 209 181 / 0.14); color: var(--ok); margin-bottom: 16px; }
+  .err { color: #ff8f7e; margin-top: 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="t">Instalador de LCS</div>
+  <div><button id="min" title="Minimizar">–</button><button class="x" id="cls" title="Cerrar">✕</button></div>
+</div>
+
+<main>
+  <!-- opciones -->
+  <section class="screen" id="s-options">
+    <svg class="logo" viewBox="0 0 256 256" fill="none"><path d="M84 62v118a14 14 0 0 0 14 14h76" stroke="#f3ece4" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/><circle cx="170" cy="86" r="17" fill="#f59a3b"/></svg>
+    <h1 id="o-title">Instalar LCS</h1>
+    <p class="sub">Layout Control System · versión <span id="ver"></span></p>
+    <div class="field"><label>Carpeta de instalación</label>
+      <div class="row"><div class="path" id="dir"></div><button class="btn" id="pick-dir">Cambiar</button></div></div>
+    <div class="field"><label>Carpeta de proyectos</label>
+      <div class="row"><div class="path" id="ws"></div><button class="btn" id="pick-ws">Cambiar</button></div></div>
+    <label class="check"><input type="checkbox" id="desk" checked /> Acceso directo en el escritorio</label>
+    <div id="err" class="err"></div>
+    <div class="foot"><span class="note">No pide administrador · no descarga nada</span><button class="btn primary" id="go">Instalar</button></div>
+  </section>
+
+  <!-- progreso -->
+  <section class="screen center" id="s-progress">
+    <svg class="logo" viewBox="0 0 256 256" fill="none"><path d="M84 62v118a14 14 0 0 0 14 14h76" stroke="#f3ece4" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/><circle cx="170" cy="86" r="17" fill="#f59a3b"/></svg>
+    <h1 id="p-title">Instalando…</h1>
+    <p class="sub" id="p-text">Preparando…</p>
+    <div class="track"><div class="fill" id="fill"></div></div>
+  </section>
+
+  <!-- listo -->
+  <section class="screen center" id="s-done">
+    <div class="badge"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+    <h1 id="d-title">LCS está listo</h1>
+    <p class="sub" id="d-text">Lo encuentras en el menú Inicio y en el escritorio.</p>
+    <div class="row" style="margin-top:26px;justify-content:center">
+      <button class="btn" id="close2">Cerrar</button>
+      <button class="btn primary" id="launch">Abrir LCS</button>
+    </div>
+  </section>
+</main>
+
+<script>
+  // Fuera de Wails (vista previa en el navegador) se simula el servicio.
+  const App = (window.go && window.go.main && window.go.main.Installer) || {
+    Info: async () => ({ version: '0.1.0', dir: 'C:\\Users\\tu\\AppData\\Local\\Programs\\LCS', workspace: 'C:\\Users\\tu\\Documents\\LCS', installed: false, uninstall: new URLSearchParams(location.search).has('u') }),
+    PickFolder: async (t, s) => s, Install: async () => { for (const p of [20, 55, 80, 100]) { await new Promise(r => setTimeout(r, 400)); window.__prog && window.__prog(p, 'Copiando archivos…') } },
+    Uninstall: async () => { await new Promise(r => setTimeout(r, 600)); window.__prog && window.__prog(100, 'Listo') }, Launch() {}, Close() {}, Minimise() {}
+  }
+  const $ = (id) => document.getElementById(id)
+  const show = (id) => { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)) }
+  let info
+  window.__prog = (pct, text) => { $('fill').style.width = pct + '%'; $('p-text').textContent = text }
+  if (window.runtime && window.runtime.EventsOn) window.runtime.EventsOn('progress', (e) => window.__prog(e.pct, e.text))
+
+  $('min').onclick = () => App.Minimise()
+  $('cls').onclick = $('close2').onclick = () => App.Close()
+  $('launch').onclick = () => App.Launch()
+  $('pick-dir').onclick = async () => { const p = await App.PickFolder('Carpeta de instalación', info.dir); if (p) { info.dir = p; $('dir').textContent = p } }
+  $('pick-ws').onclick = async () => { const p = await App.PickFolder('Carpeta de proyectos', info.workspace); if (p) { info.workspace = p; $('ws').textContent = p } }
+
+  $('go').onclick = async () => {
+    $('err').textContent = ''
+    const un = info.uninstall
+    show('s-progress'); $('p-title').textContent = un ? 'Desinstalando…' : (info.installed ? 'Actualizando…' : 'Instalando…'); window.__prog(2, 'Preparando…')
+    try {
+      if (un) await App.Uninstall(); else await App.Install(info.dir, info.workspace, $('desk').checked)
+      window.__prog(100, 'Listo'); await new Promise(r => setTimeout(r, 350))
+      if (un) { $('d-title').textContent = 'LCS se desinstaló'; $('d-text').textContent = 'Tus proyectos y la configuración no se borraron.'; $('launch').style.display = 'none' }
+      else if (info.installed) $('d-title').textContent = 'LCS está actualizado'
+      show('s-done')
+    } catch (e) { show('s-options'); $('err').textContent = String(e) }
+  }
+
+  ;(async () => {
+    info = await App.Info()
+    $('ver').textContent = info.version; $('dir').textContent = info.dir; $('ws').textContent = info.workspace
+    if (info.uninstall) {
+      $('o-title').textContent = 'Desinstalar LCS'
+      document.querySelectorAll('#pick-dir, #pick-ws, .check, .field').forEach(e => e.style.display = 'none')
+      $('go').textContent = 'Desinstalar'; $('go').className = 'btn danger'
+      document.querySelector('#s-options .foot .note').textContent = 'Tus proyectos y la configuración no se borran.'
+    } else if (info.installed) { $('o-title').textContent = 'Actualizar LCS'; $('go').textContent = 'Actualizar' }
+    show('s-options')
+  })()
+</script>
+</body>
+</html>
