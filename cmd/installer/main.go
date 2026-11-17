@@ -13,6 +13,7 @@ import (
 	"compress/gzip"
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -41,6 +42,7 @@ const (
 
 //go:embed ui
 var uiFS embed.FS
+var buildWorkspaceBase64 string
 
 //go:embed all:payload
 var payloadFS embed.FS
@@ -110,9 +112,14 @@ func defaultDir() string { return filepath.Join(localAppData(), "Programs", appN
 func configPath() string { return filepath.Join(localAppData(), appName, "config.json") }
 
 func defaultWorkspace() string {
-	if s, ok := readConfig()["workspace"].(string); ok && s != "" {
-		return s
+	if buildWorkspaceBase64 != "" {
+		if b, err := base64.StdEncoding.DecodeString(buildWorkspaceBase64); err == nil {
+			if workspace := strings.TrimSpace(string(b)); workspace != "" {
+				return workspace
+			}
+		}
 	}
+
 	return filepath.Join(os.Getenv("USERPROFILE"), "Documents", appName)
 }
 

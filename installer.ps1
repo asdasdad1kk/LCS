@@ -32,16 +32,55 @@ try {
   $src.CopyTo($zip)
   $zip.Dispose(); $dst.Dispose(); $src.Dispose()
 
-  Write-Host '[2/3] go build installer' -ForegroundColor Cyan
-  # Mismo icono y manifiesto que LCS.exe.
-  Copy-Item 'cmd\lcs\rsrc_windows_amd64.syso' 'cmd\installer\rsrc_windows_amd64.syso' -Force
-  New-Item -ItemType Directory -Force dist | Out-Null
-  $env:CGO_ENABLED = '1'
-  & $go build -tags "desktop,production" -trimpath -ldflags="-s -w -H windowsgui" -o dist\LCS-Setup.exe ./cmd/installer
-  if ($LASTEXITCODE -ne 0) { throw "go build fallo con codigo $LASTEXITCODE" }
+ Write-Host '[2/3] go build installer' -ForegroundColor Cyan
 
-  $size = [math]::Round((Get-Item dist\LCS-Setup.exe).Length / 1MB, 1)
-  Write-Host "[3/3] OK - dist\LCS-Setup.exe listo ($size MB)" -ForegroundColor Green
+Copy-Item `
+  'cmd\lcs\rsrc_windows_amd64.syso' `
+  'cmd\installer\rsrc_windows_amd64.syso' `
+  -Force
+
+New-Item -ItemType Directory -Force dist | Out-Null
+
+$env:CGO_ENABLED = '1'
+
+if (-not $env:LCS_WORKSPACE) {
+  throw 'LCS_WORKSPACE no esta definido en .env'
+}
+
+$workspace = $env:LCS_WORKSPACE.Trim()
+
+Write-Host "Workspace: $workspace" -ForegroundColor DarkGray
+
+$workspaceB64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($workspace)
+)
+
+$ldflags = "-s -w -H windowsgui -X main.buildWorkspaceBase64=$workspaceB64"
+
+$arguments = @(
+  'build'
+  '-tags'
+  'desktop,production'
+  '-trimpath'
+  '-ldflags'
+  $ldflags
+  '-o'
+  'dist\LCS-Setup.exe'
+  './cmd/installer'
+)
+
+& $go @arguments
+
+if ($LASTEXITCODE -ne 0) {
+  throw "go build fallo con codigo $LASTEXITCODE"
+}
+
+$size = [math]::Round(
+  (Get-Item dist\LCS-Setup.exe).Length / 1MB,
+  1
+)
+
+Write-Host "[3/3] OK - dist\LCS-Setup.exe listo ($size MB)" -ForegroundColor Green
 } finally {
   Pop-Location
 }
