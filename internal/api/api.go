@@ -35,6 +35,7 @@ func (a *API) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/projects", a.wrap(a.listProjects))
 	mux.HandleFunc("POST /api/projects", a.wrap(a.createProject))
 	mux.HandleFunc("GET /api/projects/{id}", a.wrap(a.getProject))
+	mux.HandleFunc("DELETE /api/projects/{id}", a.wrap(a.deleteProject))
 	mux.HandleFunc("POST /api/projects/{id}/sync", a.wrap(a.syncProject))
 	mux.HandleFunc("POST /api/projects/{id}/integrate", a.wrap(a.integrateProject))
 	mux.HandleFunc("GET /api/projects/{id}/approvers", a.wrap(a.getApprovers))
@@ -61,6 +62,9 @@ func (a *API) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/branches/{id}/download", a.wrap(a.download))
 	mux.HandleFunc("POST /api/branches/{id}/merge", a.wrap(a.merge))
 	mux.HandleFunc("POST /api/branches/{id}/close", a.wrap(a.closeBranch))
+	mux.HandleFunc("GET /api/branches/{id}/snapshots", a.wrap(a.listSnapshots))
+	mux.HandleFunc("POST /api/branches/{id}/snapshots", a.wrap(a.addSnapshot))
+	mux.HandleFunc("GET /api/branches/{id}/snapshots/{sid}", a.wrap(a.snapshotImage))
 
 	return mux
 }
@@ -671,3 +675,58 @@ func (a *API) approve(w http.ResponseWriter, r *http.Request) error {
 	return a.decide(w, r, "approved")
 }
 func (a *API) reject(w http.ResponseWriter, r *http.Request) error { return a.decide(w, r, "rejected") }
+
+func (a *API) deleteProject(w http.ResponseWriter, r *http.Request) error {
+	res, err := a.svc.DeleteProject(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, res)
+	return nil
+}
+
+func (a *API) listSnapshots(w http.ResponseWriter, r *http.Request) error {
+	list, err := a.svc.Snapshots(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, list)
+	return nil
+}
+
+func (a *API) addSnapshot(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		return fmt.Errorf("no pude leer el recorte: %w", err)
+	}
+	f, _, err := r.FormFile("image")
+	if err != nil {
+		return errors.New("falta la imagen del recorte")
+	}
+	defer f.Close()
+	png, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+	sn, err := a.svc.AddSnapshot(r.PathValue("id"), app.SnapshotInput{
+		Caption: r.FormValue("caption"), Drawing: r.FormValue("drawing"), Layout: r.FormValue("layout"), PNG: png,
+	})
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 201, sn)
+	return nil
+}
+
+func (a *API) snapshotImage(w http.ResponseWriter, r *http.Request) error {
+	rd, size, err := a.svc.SnapshotImage(r.PathValue("id"), r.PathValue("sid"))
+	if err != nil {
+		return err
+	}
+	defer rd.Close()
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	_, _ = io.Copy(w, rd)
+	return nil
+}

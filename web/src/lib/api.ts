@@ -142,6 +142,8 @@ export type Overlap = {
 export type ReviewView = {
   required: boolean
   hasChanges: boolean
+  /** Ya se subió al menos una versión (aunque sea idéntica a main). */
+  uploaded?: boolean
   /** Se puede integrar: no hay cadena, o todos aprobaron esta versión. */
   complete: boolean
   nodes: ReviewNode[]
@@ -283,6 +285,8 @@ export const api = {
   createProject: (body: { name: string; description?: string; parentId?: string }) =>
     req<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   project: (id: string) => req<ProjectDetail>(`/api/projects/${id}`),
+  deleteProject: (id: string) =>
+    req<{ deleted: string[] }>(`/api/projects/${id}`, { method: 'DELETE' }),
   syncProject: (id: string) => req<{ ok: boolean }>(`/api/projects/${id}/sync`, { method: 'POST' }),
   integrateProject: (id: string, strategy?: string) =>
     req<{ commit: string; paths: string[] }>(`/api/projects/${id}/integrate`, {
@@ -317,6 +321,18 @@ export const api = {
     }),
   closeBranch: (id: string) =>
     req<{ ok: boolean }>(`/api/branches/${id}/close`, { method: 'POST' }),
+  snapshots: (id: string) => req<Snapshot[]>(`/api/branches/${id}/snapshots`),
+  addSnapshot: (
+    id: string,
+    image: Blob,
+    meta: { caption?: string; drawing?: string; layout?: string }
+  ) => {
+    const form = new FormData()
+    form.append('image', image, 'recorte.png')
+    for (const [k, v] of Object.entries(meta)) if (v) form.append(k, v)
+    return req<Snapshot>(`/api/branches/${id}/snapshots`, { method: 'POST', body: form })
+  },
+  snapshotUrl: (id: string, sid: string) => `${directBase}/api/branches/${id}/snapshots/${sid}`,
 
   me: () => req<Identity>('/api/me'),
   approvers: (projectId: string) => req<ApproversView>(`/api/projects/${projectId}/approvers`),
@@ -391,4 +407,16 @@ export function uploadToBranch(
   form.append('file', file, file.name)
   form.append('message', message)
   return uploadWithProgress<Branch>(`/api/branches/${branchId}/upload`, form, onProgress)
+}
+
+/** Recorte de la zona de un layout que se va a cambiar, guardado con la tarea. */
+export type Snapshot = {
+  id: string
+  caption: string
+  author: string
+  email: string
+  drawing?: string
+  layout?: string
+  at: number
+  size: number
 }

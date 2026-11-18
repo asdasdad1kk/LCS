@@ -136,11 +136,12 @@ func Init(bare, local string, pf ProjectFile, actor string) error {
 		}
 	}
 
-	return r.Push(&git.PushOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{"refs/heads/main:refs/heads/main"},
-		Force:      false,
-	})
+	head, err := r.Head()
+	if err != nil {
+		return err
+	}
+	rp := &Repo{Bare: bare, Local: local}
+	return rp.publish(r, MainBranch, head.Hash())
 }
 
 func projectReadme(name string) string {
@@ -274,63 +275,22 @@ func (r *Repo) DeleteBranch(name string) error {
 	if err != nil {
 		return err
 	}
-	_ = repo.Push(&git.PushOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{config.RefSpec(":refs/heads/" + name)},
-	})
+	defer closeRepo(repo)
+	if bare, err := git.PlainOpen(r.Bare); err == nil {
+		_ = bare.Storer.RemoveReference(branchRef(name))
+		closeRepo(bare)
+	}
+	_ = repo.Storer.RemoveReference(plumbing.NewRemoteReferenceName("origin", name))
+	fetchedAt.set(r.Local, time.Time{})
 	return repo.Storer.RemoveReference(branchRef(name))
 }
 
 // ---------------------------------------------------------------- sync
 
-func (r *Repo) Fetch() error {
-	repo, err := open(r.Local)
-	if err != nil {
-		return err
-	}
-	err = repo.Fetch(&git.FetchOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
-		Force:      true,
-		// Una rama descartada en otro equipo desaparece también de aquí.
-		Prune: true,
-	})
-	if errors.Is(err, git.NoErrAlreadyUpToDate) {
-		return nil
-	}
-	return err
-}
-
-// Pull brings the local clone up to date with the shared repository and leaves
-// the worktree on the requested branch.
+// Pull brings the local clone up to date with the shared repository. Ya no se
+// mueve ningún directorio de trabajo: todo se lee de la base de objetos.
 func (r *Repo) Pull(branch string) error {
-	if err := r.SyncBranches(); err != nil {
-		return err
-	}
-	repo, err := open(r.Local)
-	if err != nil {
-		return err
-	}
-	w, err := repo.Worktree()
-	if err != nil {
-		return err
-	}
-	// Checkout con Force reescribe el árbol completo: con un DWG de 150 MB eso
-	// son cientos de megas de I/O. Si ya estamos parados en el commit que
-	// toca, no hay nada que reescribir.
-	return checkoutIfNeeded(repo, w, branch)
-}
-
-// checkoutIfNeeded mueve el worktree solo cuando HEAD no coincide ya con la rama.
-func checkoutIfNeeded(repo *git.Repository, w *git.Worktree, branch string) error {
-	if head, err := repo.Head(); err == nil {
-		if target, err := repo.ResolveRevision(plumbing.Revision(branchRef(branch))); err == nil {
-			if head.Hash() == *target {
-				return nil
-			}
-		}
-	}
-	return w.Checkout(&git.CheckoutOptions{Branch: branchRef(branch), Force: true})
+	return r.SyncBranches()
 }
 
 // SyncBranches mirrors every branch of the shared repository into the local
@@ -343,6 +303,7 @@ func (r *Repo) SyncBranches() error {
 	if err != nil {
 		return err
 	}
+	defer closeRepo(repo)
 	remoteIter, err := repo.References()
 	if err != nil {
 		return err
@@ -415,7 +376,6 @@ func (r *Repo) SyncBranches() error {
 	for _, p := range pending {
 		onRemote[p.name] = true
 	}
-	head, _ := repo.Head()
 	branches, err := repo.Branches()
 	if err != nil {
 		return err
@@ -423,7 +383,7 @@ func (r *Repo) SyncBranches() error {
 	stale := []plumbing.ReferenceName{}
 	_ = branches.ForEach(func(ref *plumbing.Reference) error {
 		name := ref.Name().Short()
-		if strings.HasPrefix(name, BranchPrefix) && !onRemote[name] && (head == nil || head.Name() != ref.Name()) {
+		if strings.HasPrefix(name, BranchPrefix) && !onRemote[name] {
 			stale = append(stale, ref.Name())
 		}
 		return nil
@@ -435,137 +395,70 @@ func (r *Repo) SyncBranches() error {
 	return nil
 }
 
+// Push publica una rama local en la carpeta compartida.
 func (r *Repo) Push(branch string) error {
 	repo, err := open(r.Local)
 	if err != nil {
 		return err
 	}
-	err = repo.Push(&git.PushOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch)},
-	})
-	if errors.Is(err, git.NoErrAlreadyUpToDate) {
-		return nil
+	defer closeRepo(repo)
+	ref, err := repo.Reference(branchRef(branch), true)
+	if err != nil {
+		return err
 	}
-	return err
+	return r.publish(repo, branch, ref.Hash())
 }
 
 // ------------------------------------------------------------------ commit
 
-func (r *Repo) checkout(branch string, create bool) (*git.Repository, *git.Worktree, error) {
-	repo, err := open(r.Local)
-	if err != nil {
-		return nil, nil, err
+func contentChanges(files map[string][]byte, removes []string) map[string]change {
+	out := make(map[string]change, len(files)+len(removes))
+	for p, content := range files {
+		if content == nil {
+			content = []byte{}
+		}
+		out[p] = change{data: content}
 	}
-	w, err := repo.Worktree()
-	if err != nil {
-		return nil, nil, err
+	for _, p := range removes {
+		out[p] = change{remove: true}
 	}
-	err = w.Checkout(&git.CheckoutOptions{Branch: branchRef(branch), Create: create, Force: true})
-	return repo, w, err
+	return out
 }
 
-func (r *Repo) commitAll(w *git.Worktree, msg, actor string, extraParents []plumbing.Hash) (plumbing.Hash, error) {
-	repo, err := open(r.Local)
+// CommitFilesOnBranch agrega archivos a una rama y la publica (las
+// aprobaciones son archivos nuevos con nombre único: nadie pisa a nadie).
+func (r *Repo) CommitFilesOnBranch(branch string, files map[string][]byte, msg, actor string) (string, error) {
+	h, err := r.commit(commitSpec{
+		Target: branch, Msg: msg, Actor: actor,
+		Build: func(plumbing.Hash) (map[string]change, []plumbing.Hash, error) {
+			return contentChanges(files, nil), nil, nil
+		},
+	})
 	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-	sig := signatureFor(actor)
-
-	// Stage everything (including deletions) before committing: go-git only
-	// commits what the index already knows about.
-	if err := w.AddWithOptions(&git.AddOptions{All: true}); err != nil {
-		return plumbing.ZeroHash, err
-	}
-
-	// Normal commit: HEAD is the only parent.
-	h, err := w.Commit(msg, &git.CommitOptions{Author: sig, Committer: sig, AllowEmptyCommits: true})
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-	if len(extraParents) <= 1 {
-		return h, nil
-	}
-
-	// Merge commit: same tree, several parents. The single-parent commit above
-	// is left unreferenced and gets pruned by git gc.
-	base, err := repo.CommitObject(h)
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-	merge := &object.Commit{
-		Author:       *sig,
-		Committer:    *sig,
-		Message:      msg,
-		TreeHash:     base.TreeHash,
-		ParentHashes: extraParents,
-	}
-	obj := repo.Storer.NewEncodedObject()
-	if err := merge.Encode(obj); err != nil {
-		return plumbing.ZeroHash, err
-	}
-	return repo.Storer.SetEncodedObject(obj)
-}
-
-// CommitOnBranch stages every change in the worktree and commits it, keeping
-// the branch tip as the single parent.
-func (r *Repo) CommitOnBranch(branch, msg, actor string) (string, error) {
-	repo, w, err := r.checkout(branch, false)
-	if err != nil {
-		return "", err
-	}
-	if status, err := w.Status(); err == nil && status.IsClean() {
-		return "", ErrNothingToDo
-	}
-	head, err := repo.Head()
-	if err != nil {
-		return "", err
-	}
-	h, err := r.commitAll(w, msg, actor, []plumbing.Hash{head.Hash()})
-	if err != nil {
-		return "", err
-	}
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef(branch), h)); err != nil {
 		return "", err
 	}
 	return h.String(), nil
 }
 
 // CreateBranch forks a new work branch from main and commits the task metadata
-// so any machine can discover it straight from the shared repository.
-func (r *Repo) CreateBranch(branch string, meta BranchMeta, actor string) (string, error) {
-	if err := r.Pull(MainBranch); err != nil {
-		return "", err
-	}
-	repo, w, err := r.checkout(branch, true)
+// so any machine can discover it straight from the shared repository. meta se
+// completa con el commit base real (la punta de main al momento de crear).
+func (r *Repo) CreateBranch(branch string, meta *BranchMeta, actor string) (string, error) {
+	h, err := r.commit(commitSpec{
+		Target: branch, From: MainBranch,
+		Msg: "LCS: abrir rama " + meta.Title, Actor: actor,
+		Build: func(base plumbing.Hash) (map[string]change, []plumbing.Hash, error) {
+			meta.BaseCommit = base.String()
+			raw, err := jsonMarshal(meta)
+			if err != nil {
+				return nil, nil, err
+			}
+			return map[string]change{BranchMetaFile: {data: raw}}, nil, nil
+		},
+	})
 	if err != nil {
 		return "", err
 	}
-	raw, err := jsonMarshal(meta)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Join(r.Local, MetaDir), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(r.Local, BranchMetaFile), raw, 0o644); err != nil {
-		return "", err
-	}
-	head, err := repo.Head()
-	if err != nil {
-		return "", err
-	}
-	h, err := r.commitAll(w, "LCS: abrir rama "+meta.Title, actor, []plumbing.Hash{head.Hash()})
-	if err != nil {
-		return "", err
-	}
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef(branch), h)); err != nil {
-		return "", err
-	}
-	if err := r.Push(branch); err != nil {
-		return "", err
-	}
-	_ = r.ReturnToMain() // ver ReturnToMain: no dejar una rama de trabajo abierta
 	return h.String(), nil
 }
 
@@ -581,43 +474,18 @@ func (r *Repo) WriteAndCommit(branch, relPath string, content []byte, msg, actor
 // WriteFilesAndCommit writes several files on the branch and records one commit.
 // It returns the blob hash of every written path.
 func (r *Repo) WriteFilesAndCommit(branch string, files map[string][]byte, removes []string, msg, actor string) (map[string]string, string, error) {
-	if err := r.Pull(branch); err != nil {
-		return nil, "", err
-	}
-	repo, w, err := r.checkout(branch, false)
+	h, err := r.commit(commitSpec{
+		Target: branch, Msg: msg, Actor: actor,
+		Build: func(plumbing.Hash) (map[string]change, []plumbing.Hash, error) {
+			return contentChanges(files, removes), nil, nil
+		},
+	})
 	if err != nil {
 		return nil, "", err
 	}
-	blobs := map[string]string{}
+	blobs := make(map[string]string, len(files))
 	for p, content := range files {
-		dst := filepath.Join(r.Local, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return nil, "", err
-		}
-		if err := os.WriteFile(dst, content, 0o644); err != nil {
-			return nil, "", err
-		}
 		blobs[p] = BlobHash(content)
-	}
-	for _, p := range removes {
-		_ = os.Remove(filepath.Join(r.Local, filepath.FromSlash(p)))
-	}
-	head, err := repo.Head()
-	if err != nil {
-		return nil, "", err
-	}
-	h, err := r.commitAll(w, msg, actor, []plumbing.Hash{head.Hash()})
-	if err != nil {
-		return nil, "", err
-	}
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef(branch), h)); err != nil {
-		return nil, "", err
-	}
-	if err := r.Push(branch); err != nil {
-		return nil, "", err
-	}
-	if branch != MainBranch {
-		_ = r.ReturnToMain() // ver ReturnToMain: no dejar una rama de trabajo abierta
 	}
 	return blobs, h.String(), nil
 }
@@ -631,98 +499,73 @@ type MergeResult struct {
 
 // MergeBranch brings the branch content for every drawing it touched into main.
 // It refuses to overwrite drawings that changed on main since the branch point
-// unless strategy is "take-branch".
+// unless strategy is "take-branch". Los planos se reutilizan por su hash: no se
+// leen ni se vuelven a escribir.
 func (r *Repo) MergeBranch(branch, baseCommit, actor, strategy, message string) (*MergeResult, error) {
-	if err := r.Pull(MainBranch); err != nil {
-		return nil, err
+	if message == "" {
+		message = "LCS: integrar " + branch
 	}
 	repo, err := open(r.Local)
 	if err != nil {
 		return nil, err
 	}
+	defer closeRepo(repo)
 
-	branchHead, err := repo.ResolveRevision(plumbing.Revision(branchRef(branch)))
+	var applied []string
+	h, err := r.commit(commitSpec{
+		Target: MainBranch, Msg: message, Actor: actor,
+		Build: func(mainHead plumbing.Hash) (map[string]change, []plumbing.Hash, error) {
+			branchHead, err := r.tip(repo, branch)
+			if err != nil {
+				return nil, nil, err
+			}
+			baseHash := plumbing.NewHash(baseCommit)
+			changedBranch, err := diffPaths(repo, baseHash, branchHead)
+			if err != nil {
+				return nil, nil, err
+			}
+			changedMain, err := diffPaths(repo, baseHash, mainHead)
+			if err != nil {
+				return nil, nil, err
+			}
+			mainSet := map[string]bool{}
+			for _, p := range changedMain {
+				mainSet[p] = true
+			}
+			conflicts := []string{}
+			for _, p := range changedBranch {
+				if mainSet[p] && !strings.HasPrefix(p, MetaDir+"/") {
+					conflicts = append(conflicts, p)
+				}
+			}
+			if len(conflicts) > 0 && strategy != "take-branch" {
+				return nil, nil, &ErrConflict{Paths: conflicts}
+			}
+
+			tree, err := treeOf(repo, branchHead)
+			if err != nil {
+				return nil, nil, err
+			}
+			changes := map[string]change{}
+			applied = applied[:0]
+			for _, p := range changedBranch {
+				if strings.HasPrefix(p, MetaDir+"/") {
+					continue
+				}
+				e, err := tree.FindEntry(p)
+				if err != nil || !e.Mode.IsFile() {
+					changes[p] = change{remove: true}
+				} else {
+					changes[p] = change{blob: e.Hash}
+				}
+				applied = append(applied, p)
+			}
+			// main never carries branch metadata
+			changes[BranchMetaFile] = change{remove: true}
+			return changes, []plumbing.Hash{branchHead}, nil
+		},
+	})
 	if err != nil {
-		return nil, err
-	}
-	mainHeadRef, err := repo.Head()
-	if err != nil {
-		return nil, err
-	}
-
-	baseHash := plumbing.NewHash(baseCommit)
-	changedBranch, err := diffPaths(repo, baseHash, *branchHead)
-	if err != nil {
-		return nil, err
-	}
-	changedMain, err := diffPaths(repo, baseHash, mainHeadRef.Hash())
-	if err != nil {
-		return nil, err
-	}
-
-	mainSet := map[string]bool{}
-	for _, p := range changedMain {
-		mainSet[p] = true
-	}
-	conflicts := []string{}
-	for _, p := range changedBranch {
-		if mainSet[p] && !strings.HasPrefix(p, MetaDir+"/") {
-			conflicts = append(conflicts, p)
-		}
-	}
-	if len(conflicts) > 0 && strategy != "take-branch" {
-		return nil, &ErrConflict{Paths: conflicts}
-	}
-
-	w, err := repo.Worktree()
-	if err != nil {
-		return nil, err
-	}
-	if err := checkoutIfNeeded(repo, w, MainBranch); err != nil {
-		return nil, err
-	}
-
-	applied := []string{}
-	for _, p := range changedBranch {
-		if strings.HasPrefix(p, MetaDir+"/") {
-			continue
-		}
-		dst := filepath.Join(r.Local, filepath.FromSlash(p))
-		blob, err := readFileAt(repo, *branchHead, p)
-		if errors.Is(err, os.ErrNotExist) {
-			_ = os.Remove(dst)
-			applied = append(applied, p)
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(dst, blob, 0o644); err != nil {
-			return nil, err
-		}
-		applied = append(applied, p)
-	}
-
-	// main never carries branch metadata
-	_ = os.Remove(filepath.Join(r.Local, filepath.FromSlash(BranchMetaFile)))
-
-	if message == "" {
-		message = "LCS: integrar " + branch
-	}
-	h, err := r.commitAll(w, message, actor, []plumbing.Hash{mainHeadRef.Hash(), *branchHead})
-	if err != nil {
-		return nil, err
-	}
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef(MainBranch), h)); err != nil {
-		return nil, err
-	}
-	if err := w.Reset(&git.ResetOptions{Commit: h, Mode: git.HardReset}); err != nil {
-		return nil, err
-	}
-	if err := r.Push(MainBranch); err != nil {
 		return nil, err
 	}
 	sort.Strings(applied)
@@ -818,11 +661,7 @@ func (r *Repo) ListDrawings(branch string) ([]TreeEntry, error) {
 		}
 		if entry.Mode.IsFile() && strings.HasPrefix(name, DrawingsDir+"/") &&
 			strings.EqualFold(path.Ext(name), ".dwg") {
-			var size int64
-			if blob, err := repo.BlobObject(entry.Hash); err == nil {
-				size = blob.Size
-			}
-			out = append(out, TreeEntry{Path: name, Size: size, Hash: entry.Hash.String()})
+			out = append(out, TreeEntry{Path: name, Size: r.blobSize(repo, entry.Hash), Hash: entry.Hash.String()})
 		}
 	}
 	return out, nil

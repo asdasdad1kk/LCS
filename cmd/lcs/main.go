@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -211,13 +212,23 @@ func warm(srv *server.Server) {
 	if err != nil {
 		return
 	}
+	// En paralelo: cada proyecto espera al NAS por separado, en serie se sumaban.
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
 	for _, p := range projects {
-		if err := svc.Sync(p.ID); err != nil {
-			slog.Warn("sync inicial", "project", p.ID, "err", err)
-			continue
-		}
-		slog.Debug("proyecto sincronizado", "project", p.ID)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := svc.Sync(id); err != nil {
+				slog.Warn("sync inicial", "project", id, "err", err)
+				return
+			}
+			slog.Debug("proyecto sincronizado", "project", id)
+		}(p.ID)
 	}
+	wg.Wait()
 }
 
 func openLog(cfg *config.Config) *os.File {

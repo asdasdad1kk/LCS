@@ -22,6 +22,7 @@ func (s *Service) Discover(background bool) int {
 	if err != nil {
 		return 0
 	}
+	s.pruneVanished()
 	found := 0
 	for _, e := range entries {
 		if !e.IsDir() {

@@ -83,10 +83,7 @@ func (r *Repo) History(branch string, limit int) ([]DrawingChange, error) {
 			if !strings.HasPrefix(name, DrawingsDir+"/") || !strings.EqualFold(path.Ext(name), ".dwg") {
 				continue
 			}
-			var size int64
-			if blob, err := repo.BlobObject(ch.To.TreeEntry.Hash); err == nil {
-				size = blob.Size
-			}
+			size := r.blobSize(repo, ch.To.TreeEntry.Hash)
 			out = append(out, DrawingChange{
 				Commit:  c.Hash.String(),
 				Path:    name,

@@ -12,7 +12,9 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  Loader2,
   Split,
+  Trash2,
   Upload
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -21,6 +23,14 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/separator'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import { PageHeader, EmptyState } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ActivityGraph } from '@/pages/dashboard'
@@ -43,6 +53,8 @@ export function ProjectPage() {
   const [newZone, setNewZone] = useState(false)
   const [importing, setImporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -123,6 +135,14 @@ export function ProjectPage() {
         description={project.description || 'Repositorio de planos gestionado con git.'}
         actions={
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setDeleting(true)}
+            >
+              <Trash2 className="size-4" /> Borrar
+            </Button>
             <Button variant="outline" size="sm" onClick={sync} disabled={syncing}>
               <RefreshCw className={syncing ? 'size-4 animate-spin' : 'size-4'} /> Sincronizar
             </Button>
@@ -443,6 +463,45 @@ export function ProjectPage() {
           }}
         />
       )}
+      <Dialog open={deleting} onOpenChange={(v) => !deleteBusy && setDeleting(v)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{isZone ? 'Borrar subproyecto' : 'Borrar proyecto'}</DialogTitle>
+            <DialogDescription>
+              Se elimina <span className="text-foreground font-medium">{project.name}</span> del NAS con
+              todo su historial, tareas y aprobaciones.
+              {!isZone && children.length > 0
+                ? ` También se borran sus ${children.length} subproyecto(s): ${children.map((z) => z.name).join(', ')}.`
+                : ''}{' '}
+              No se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeleting(false)} disabled={deleteBusy}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteBusy}
+              onClick={async () => {
+                setDeleteBusy(true)
+                try {
+                  await api.deleteProject(projectId)
+                  toast.success(isZone ? 'Subproyecto borrado' : 'Proyecto borrado')
+                  shell?.reloadProjects?.()
+                  navigate(parent ? `/p/${parent.id}` : '/proyectos')
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'no pude borrar el proyecto')
+                  setDeleteBusy(false)
+                }
+              }}
+            >
+              {deleteBusy && <Loader2 className="size-4 animate-spin" />}
+              Borrar definitivamente
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {conflictDialog}
     </div>
   )

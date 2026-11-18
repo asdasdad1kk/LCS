@@ -10,6 +10,7 @@ import {
   FileBox,
   GitBranch,
   GitMerge,
+  Images,
   Loader2,
   PencilLine,
   ShieldCheck,
@@ -17,7 +18,7 @@ import {
   Upload
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, ApiError, type Branch, type ReviewView } from '@/lib/api'
+import { api, ApiError, type Branch, type ReviewView, type Snapshot } from '@/lib/api'
 import { ApprovalActions, ApprovalChain } from '@/components/approval-chain'
 import { BranchTimeline } from '@/components/branch-timeline'
 import { Button } from '@/components/ui/button'
@@ -52,10 +53,24 @@ export function TaskPage() {
   const [closing, setClosing] = useState(false)
   const [closingBusy, setClosingBusy] = useState(false)
   const [drawingIds, setDrawingIds] = useState<Record<string, string>>({})
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [openSnap, setOpenSnap] = useState<Snapshot | null>(null)
 
+  const loadSnapshots = useCallback(async () => {
+    try {
+      setSnapshots(await api.snapshots(taskId))
+    } catch {
+      /* los recortes son un extra: la tarea se ve igual */
+    }
+  }, [taskId])
+
+  // La revisión recalcula en git qué planos cambiaron y corrige la copia local;
+  // la tarea se vuelve a leer después para que ambas pantallas coincidan (antes
+  // se leía primero y mostraba "no hay cambios subidos" con datos viejos).
   const loadReview = useCallback(async () => {
     try {
       setReview(await api.review(taskId))
+      setBranch(await api.branch(taskId))
     } catch {
       /* las aprobaciones son secundarias: la tarea se ve igual */
     }
@@ -70,7 +85,8 @@ export function TaskPage() {
       setLoading(false)
     }
     await loadReview()
-  }, [taskId, loadReview])
+    void loadSnapshots()
+  }, [taskId, loadReview, loadSnapshots])
 
   useEffect(() => {
     load()
@@ -112,7 +128,8 @@ export function TaskPage() {
   }, [projectId])
 
   const files = branch?.files ?? []
-  const hasChanges = files.some((f) => f.changed)
+  // Manda lo que calculó la revisión desde git; los archivos del índice local son el respaldo.
+  const hasChanges = review ? review.hasChanges : files.some((f) => f.changed)
   const isDone = branch?.status === 'merged' || branch?.status === 'closed'
 
   // Con aprobadores, el flujo tiene un paso más: Aprobar va antes de Integrar.
@@ -304,6 +321,7 @@ export function TaskPage() {
             <TabsList>
               <TabsTrigger value="files">Archivos · {files.length}</TabsTrigger>
               <TabsTrigger value="preview">Vista previa</TabsTrigger>
+              <TabsTrigger value="snaps">Recortes{snapshots.length ? ` · ${snapshots.length}` : ''}</TabsTrigger>
               <TabsTrigger value="history">Línea de tiempo</TabsTrigger>
             </TabsList>
 
@@ -364,6 +382,20 @@ export function TaskPage() {
                       fileName={fileName(firstFile.path)}
                       refName={branch.name}
                       className="h-full w-full"
+                      onSnapshot={
+                        isDone
+                          ? undefined
+                          : async (png, caption) => {
+                              try {
+                                await api.addSnapshot(branch.id, png, { caption, drawing: fileName(firstFile.path) })
+                                toast.success('Recorte guardado en la tarea')
+                                void loadSnapshots()
+                              } catch (err) {
+                                toast.error(err instanceof Error ? err.message : 'no pude guardar el recorte')
+                                throw err
+                              }
+                            }
+                      }
                     />
                   </div>
                 )
@@ -376,6 +408,42 @@ export function TaskPage() {
                 Esta vista lee el DWG desde la rama <span className="font-mono">{branch.name}</span>, no
                 desde main.
               </p>
+            </TabsContent>
+
+            <TabsContent value="snaps" className="mt-3">
+              {snapshots.length === 0 ? (
+                <div className="text-muted-foreground rounded-lg border border-dashed px-6 py-12 text-center text-[13px]">
+                  <Images className="mx-auto mb-2 size-5 opacity-60" />
+                  Todavía no hay recortes. En la vista previa usá el botón de recortar para marcar la
+                  zona del layout que se va a cambiar.
+                </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {snapshots.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setOpenSnap(s)}
+                      className="bg-card hover:border-primary/60 overflow-hidden rounded-lg border text-left transition-colors"
+                    >
+                      <div className="grid h-40 place-items-center bg-white">
+                        <img
+                          src={api.snapshotUrl(branch.id, s.id)}
+                          alt={s.caption || 'Recorte'}
+                          loading="lazy"
+                          className="max-h-40 object-contain"
+                        />
+                      </div>
+                      <div className="border-t px-3 py-2">
+                        <p className="truncate text-[12.5px] font-medium">{s.caption || 'Sin nota'}</p>
+                        <p className="text-muted-foreground text-[11px]">
+                          {s.author} · {timeAgo(s.at)}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </TabsContent>
 
             <TabsContent value="history" className="mt-3">
@@ -448,6 +516,31 @@ export function TaskPage() {
         busy={merging}
         onForce={() => doMerge('take-branch')}
       />
+
+      <Dialog open={!!openSnap} onOpenChange={(v) => !v && setOpenSnap(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{openSnap?.caption || 'Recorte del layout'}</DialogTitle>
+            <DialogDescription>
+              {openSnap && `${openSnap.author} · ${formatDate(openSnap.at)}`}
+            </DialogDescription>
+          </DialogHeader>
+          {openSnap && (
+            <div className="max-h-[70vh] overflow-auto rounded-md border bg-white">
+              <img src={api.snapshotUrl(branch.id, openSnap.id)} alt="Recorte" className="mx-auto" />
+            </div>
+          )}
+          <DialogFooter>
+            {openSnap && (
+              <Button variant="outline" asChild>
+                <a href={api.snapshotUrl(branch.id, openSnap.id)} download={`recorte-${openSnap.id}.png`}>
+                  <Download className="size-4" /> Descargar
+                </a>
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={closing} onOpenChange={setClosing}>
         <DialogContent className="max-w-md">
@@ -534,7 +627,9 @@ function ApprovalCard({
         <div className="flex flex-col">
           {!hasChanges && !isDone && (
             <p className="text-muted-foreground bg-muted/50 rounded-md px-3 py-2 text-[12.5px]">
-              Todavía no hay cambios subidos: no hay nada que aprobar.
+              {review.uploaded
+                ? 'Subiste una versión, pero el plano es idéntico al de main: no hay diferencias que aprobar. Subí un DWG con cambios.'
+                : 'Todavía no hay cambios subidos: no hay nada que aprobar.'}
             </p>
           )}
           <ApprovalActions review={review} onApprove={onApprove} onReject={onReject} />

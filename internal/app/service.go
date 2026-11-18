@@ -31,12 +31,22 @@ type Service struct {
 	// Cuándo se trajo por última vez lo de la carpeta compartida (ver
 	// RefreshAllReviews y MaybeDiscover).
 	refreshMu    sync.Mutex
+
+	// Uso de disco por proyecto: recorrer el repo del NAS entero en cada carga
+	// de pantalla era carísimo, así que se calcula en segundo plano y se cachea.
+	usageMu sync.Mutex
+	usage   map[string]*usageEntry
+
+	// Último main ya indexado por proyecto: si no se movió, no hace falta
+	// recorrer de nuevo el historial.
+	indexedMu   sync.Mutex
+	indexedMain map[string]string
 	refreshedAt  time.Time
 	discoveredAt time.Time
 }
 
 func New(cfg *config.Config, st *store.Store) *Service {
-	return &Service{cfg: cfg, st: st}
+	return &Service{cfg: cfg, st: st, usage: map[string]*usageEntry{}, indexedMain: map[string]string{}}
 }
 
 func (s *Service) Config() *config.Config { return s.cfg }
@@ -227,9 +237,19 @@ func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
 		}
 	}
 
-	// Revisions of main.
-	if err := s.backfill(projectID, repo, vcs.MainBranch, ""); err != nil {
-		return err
+	// Revisions of main (solo si main avanzó desde la última vez).
+	if head, err := repo.HeadOf(vcs.MainBranch); err == nil {
+		s.indexedMu.Lock()
+		same := s.indexedMain[projectID] == head
+		s.indexedMu.Unlock()
+		if !same {
+			if err := s.backfill(projectID, repo, vcs.MainBranch, ""); err != nil {
+				return err
+			}
+			s.indexedMu.Lock()
+			s.indexedMain[projectID] = head
+			s.indexedMu.Unlock()
+		}
 	}
 
 	// Work branches.
@@ -307,13 +327,13 @@ func (s *Service) branchFileStates(repo *vcs.Repo, branch, base, head string, de
 		}
 		f := store.BranchFile{BranchID: branchID(branch), Path: p}
 		if base != "" {
-			if b, err := repo.FileAt(base, p); err == nil {
-				f.BaseBlob = vcs.BlobHash(b)
+			if h, _, err := repo.FileInfoAt(base, p); err == nil {
+				f.BaseBlob = h
 			}
 		}
-		if b, err := repo.FileAt(head, p); err == nil {
-			f.HeadBlob = vcs.BlobHash(b)
-			f.SizeBytes = int64(len(b))
+		if h, size, err := repo.FileInfoAt(head, p); err == nil {
+			f.HeadBlob = h
+			f.SizeBytes = size
 		}
 		f.Changed = f.BaseBlob != f.HeadBlob
 		out = append(out, f)
@@ -390,13 +410,37 @@ func (s *Service) DrawingReader(projectID, drawingPath, ref string) (io.ReadClos
 
 // Usage reports how much disk a project occupies: the bare repository on the
 // shared folder and this machine's clone.
+//
+// Recorrer todos los archivos de un repositorio en el NAS toma segundos (uno por
+// archivo), así que nunca bloquea la respuesta: devuelve lo último calculado y
+// refresca en segundo plano cuando está viejo.
+type usageEntry struct {
+	repo, clone int64
+	at          time.Time
+	running     bool
+}
+
+const usageTTL = 5 * time.Minute
+
 func (s *Service) Usage(projectID string) (repoBytes, cloneBytes int64, err error) {
-	repoBytes, err = dirSize(filepath.Join(s.cfg.ProjectsDir(), projectID, "repo.git"))
-	if err != nil {
-		return 0, 0, err
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	e := s.usage[projectID]
+	if e == nil {
+		e = &usageEntry{}
+		s.usage[projectID] = e
 	}
-	cloneBytes, _ = dirSize(filepath.Join(s.cfg.ClonesDir(), projectID))
-	return repoBytes, cloneBytes, nil
+	if !e.running && time.Since(e.at) > usageTTL {
+		e.running = true
+		go func() {
+			rb, _ := dirSize(filepath.Join(s.cfg.ProjectsDir(), projectID, "repo.git"))
+			cb, _ := dirSize(filepath.Join(s.cfg.ClonesDir(), projectID))
+			s.usageMu.Lock()
+			e.repo, e.clone, e.at, e.running = rb, cb, time.Now(), false
+			s.usageMu.Unlock()
+		}()
+	}
+	return e.repo, e.clone, nil
 }
 
 func dirSize(root string) (int64, error) {
@@ -467,7 +511,7 @@ func (s *Service) CreateBranch(in CreateBranchInput) (*store.Branch, error) {
 			if !strings.HasPrefix(p, vcs.DrawingsDir+"/") {
 				p = vcs.DrawingsDir + "/" + path.Base(p)
 			}
-			if _, err := repo.FileAtRef(vcs.MainBranch, p); err != nil {
+			if _, _, err := repo.FileInfoAt(vcs.MainBranch, p); err != nil {
 				return fmt.Errorf("%s no existe en el proyecto", path.Base(p))
 			}
 			normalized = append(normalized, p)
@@ -483,10 +527,11 @@ func (s *Service) CreateBranch(in CreateBranchInput) (*store.Branch, error) {
 			Drawings:    normalized,
 			Notes:       in.Notes,
 		}
-		head, err := repo.CreateBranch(name, meta, author)
+		head, err := repo.CreateBranch(name, &meta, author)
 		if err != nil {
 			return err
 		}
+		base = meta.BaseCommit // la punta de main sobre la que se abrió de verdad
 
 		tree, _ := repo.DrawingsTreeHash(name)
 		b := &store.Branch{

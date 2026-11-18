@@ -6,16 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
@@ -97,7 +94,8 @@ func ReadBareProject(bare string) (*ProjectFile, error) {
 }
 
 // EnsureClone crea el clon local de un proyecto que ya existe en la carpeta
-// compartida. Si el clon ya está, no hace nada.
+// compartida. Si el clon ya está, no hace nada. No hay directorio de trabajo:
+// los planos se leen de la base de objetos.
 func EnsureClone(bare, local string) error {
 	if _, err := git.PlainOpen(local); err == nil {
 		return nil
@@ -105,14 +103,25 @@ func EnsureClone(bare, local string) error {
 	if _, err := os.Stat(filepath.Join(bare, "HEAD")); err != nil {
 		return fmt.Errorf("no existe el repositorio compartido %s", bare)
 	}
-	_, err := git.PlainClone(local, false, &git.CloneOptions{URL: bare})
-	if err != nil {
+	fail := func(err error) error {
 		_ = os.RemoveAll(local) // no dejar un clon a medias
 		return fmt.Errorf("clonando %s: %w", bare, err)
 	}
+	r, err := git.PlainInitWithOptions(local, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.Main},
+	})
+	if err != nil {
+		return fail(err)
+	}
+	if _, err := r.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{bare}}); err != nil {
+		return fail(err)
+	}
+	rp := &Repo{Bare: bare, Local: local}
+	if err := rp.SyncBranches(); err != nil {
+		return fail(err)
+	}
 	return nil
 }
-
 // TryLock ejecuta fn solo si nadie más está usando el clon; si está ocupado
 // devuelve false sin esperar.
 func (r *Repo) TryLock(fn func() error) (bool, error) {
@@ -122,21 +131,6 @@ func (r *Repo) TryLock(fn func() error) (bool, error) {
 	}
 	defer mu.Unlock()
 	return true, fn()
-}
-
-// ReturnToMain deja el directorio de trabajo en main. Una rama de trabajo no
-// debe quedar abierta: si otro equipo la avanza, los archivos del directorio
-// quedarían desfasados respecto de la rama y el siguiente commit los revertiría.
-func (r *Repo) ReturnToMain() error {
-	repo, err := open(r.Local)
-	if err != nil {
-		return err
-	}
-	w, err := repo.Worktree()
-	if err != nil {
-		return err
-	}
-	return checkoutIfNeeded(repo, w, MainBranch)
 }
 
 // DrawingsTreeHash identifica el contenido exacto de drawings/ en una
@@ -170,6 +164,12 @@ type NamedFile struct {
 
 // ListFilesAt lee los archivos (no recursivo) de una carpeta en una revisión.
 func (r *Repo) ListFilesAt(revision, dir string) ([]NamedFile, error) {
+	return r.ListFilesWhere(revision, dir, nil)
+}
+
+// ListFilesWhere es ListFilesAt con un filtro por nombre: evita leer archivos
+// que no interesan (p. ej. las imágenes al buscar solo los JSON).
+func (r *Repo) ListFilesWhere(revision, dir string, keep func(name string) bool) ([]NamedFile, error) {
 	repo, err := open(r.Local)
 	if err != nil {
 		return nil, err
@@ -188,7 +188,7 @@ func (r *Repo) ListFilesAt(revision, dir string) ([]NamedFile, error) {
 	}
 	out := []NamedFile{}
 	for _, e := range sub.Entries {
-		if !e.Mode.IsFile() {
+		if !e.Mode.IsFile() || (keep != nil && !keep(e.Name)) {
 			continue
 		}
 		f, err := sub.TreeEntryFile(&e)
@@ -245,71 +245,6 @@ func branchTip(repo *git.Repository, branch string) (plumbing.Hash, error) {
 	return ref.Hash(), nil
 }
 
-// CommitFilesOnBranch agrega archivos a una rama y la publica, sin tocar el
-// directorio de trabajo: los DWG de la rama no se reescriben en disco. Se usa
-// para las aprobaciones, que son archivos nuevos con nombre único: dos
-// personas aprobando a la vez nunca pisan el mismo archivo, y si la
-// publicación pierde la carrera se reconstruye sobre la punta actual.
-func (r *Repo) CommitFilesOnBranch(branch string, files map[string][]byte, msg, actor string) (string, error) {
-	repo, err := open(r.Local)
-	if err != nil {
-		return "", err
-	}
-	refspec := config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch)
-
-	for attempt := 0; attempt < 6; attempt++ {
-		_ = r.Fetch()
-
-		localRef, _ := repo.Reference(branchRef(branch), true)
-		remoteRef, _ := repo.Reference(plumbing.NewRemoteReferenceName("origin", branch), true)
-		base, err := pickBase(repo, localRef, remoteRef)
-		if err != nil {
-			return "", fmt.Errorf("rama %s: %w", branch, err)
-		}
-
-		baseCommit, err := repo.CommitObject(base)
-		if err != nil {
-			return "", err
-		}
-		baseTree, err := baseCommit.Tree()
-		if err != nil {
-			return "", err
-		}
-		newTree, err := putFiles(repo, baseTree, files)
-		if err != nil {
-			return "", err
-		}
-
-		sig := signatureFor(actor)
-		c := &object.Commit{
-			Author: *sig, Committer: *sig, Message: msg,
-			TreeHash: newTree, ParentHashes: []plumbing.Hash{base},
-		}
-		obj := repo.Storer.NewEncodedObject()
-		if err := c.Encode(obj); err != nil {
-			return "", err
-		}
-		hash, err := repo.Storer.SetEncodedObject(obj)
-		if err != nil {
-			return "", err
-		}
-		if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef(branch), hash)); err != nil {
-			return "", err
-		}
-
-		err = repo.Push(&git.PushOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{refspec}})
-		if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return hash.String(), nil
-		}
-		if errors.Is(err, git.ErrNonFastForwardUpdate) {
-			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
-			continue // otro equipo publicó antes: rehacer sobre su punta
-		}
-		return "", err
-	}
-	return "", errors.New("la rama cambia demasiado rápido; reintentá en unos segundos")
-}
-
 // pickBase elige sobre qué commit construir: la punta más avanzada. Si el
 // local tiene commits sin publicar, se publican junto con el nuevo; si
 // divergieron, manda lo compartido.
@@ -331,81 +266,6 @@ func pickBase(repo *git.Repository, local, remote *plumbing.Reference) (plumbing
 		return local.Hash(), nil
 	}
 	return remote.Hash(), nil
-}
-
-// putFiles devuelve el árbol que resulta de agregar (o reemplazar) archivos en
-// base, reutilizando todo lo demás sin leerlo.
-func putFiles(repo *git.Repository, base *object.Tree, files map[string][]byte) (plumbing.Hash, error) {
-	entries := map[string]object.TreeEntry{}
-	if base != nil {
-		for _, e := range base.Entries {
-			entries[e.Name] = e
-		}
-	}
-	nested := map[string]map[string][]byte{}
-	for p, content := range files {
-		p = path.Clean(strings.TrimPrefix(p, "/"))
-		head, rest, isDir := strings.Cut(p, "/")
-		if !isDir {
-			obj := repo.Storer.NewEncodedObject()
-			obj.SetType(plumbing.BlobObject)
-			w, err := obj.Writer()
-			if err != nil {
-				return plumbing.ZeroHash, err
-			}
-			if _, err := w.Write(content); err != nil {
-				return plumbing.ZeroHash, err
-			}
-			if err := w.Close(); err != nil {
-				return plumbing.ZeroHash, err
-			}
-			h, err := repo.Storer.SetEncodedObject(obj)
-			if err != nil {
-				return plumbing.ZeroHash, err
-			}
-			entries[head] = object.TreeEntry{Name: head, Mode: filemode.Regular, Hash: h}
-			continue
-		}
-		if nested[head] == nil {
-			nested[head] = map[string][]byte{}
-		}
-		nested[head][rest] = content
-	}
-	for dir, sub := range nested {
-		var child *object.Tree
-		if e, ok := entries[dir]; ok && e.Mode == filemode.Dir {
-			t, err := repo.TreeObject(e.Hash)
-			if err != nil {
-				return plumbing.ZeroHash, err
-			}
-			child = t
-		}
-		h, err := putFiles(repo, child, sub)
-		if err != nil {
-			return plumbing.ZeroHash, err
-		}
-		entries[dir] = object.TreeEntry{Name: dir, Mode: filemode.Dir, Hash: h}
-	}
-
-	list := make([]object.TreeEntry, 0, len(entries))
-	for _, e := range entries {
-		list = append(list, e)
-	}
-	// git ordena las carpetas como si su nombre terminara en "/".
-	key := func(e object.TreeEntry) string {
-		if e.Mode == filemode.Dir {
-			return e.Name + "/"
-		}
-		return e.Name
-	}
-	sort.Slice(list, func(i, j int) bool { return key(list[i]) < key(list[j]) })
-
-	t := &object.Tree{Entries: list}
-	obj := repo.Storer.NewEncodedObject()
-	if err := t.Encode(obj); err != nil {
-		return plumbing.ZeroHash, err
-	}
-	return repo.Storer.SetEncodedObject(obj)
 }
 
 // signatureFor arma la firma de un commit. Si actor es un correo se usa tal

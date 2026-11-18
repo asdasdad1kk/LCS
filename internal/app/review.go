@@ -43,6 +43,8 @@ type ReviewState struct {
 	// Required: el proyecto tiene aprobadores. Sin ellos no hay compuerta.
 	Required   bool `json:"required"`
 	HasChanges bool `json:"hasChanges"`
+	// Uploaded: ya se subió al menos una versión (aunque sea idéntica a main).
+	Uploaded bool `json:"uploaded"`
 	// Complete: se puede integrar (no hay cadena, o todos aprobaron).
 	Complete bool   `json:"complete"`
 	Nodes    []Node `json:"nodes"`

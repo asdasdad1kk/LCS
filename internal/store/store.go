@@ -698,3 +698,29 @@ func (s *Store) ListApprovals(branchID string) ([]Approval, error) {
 	}
 	return out, rows.Err()
 }
+
+// DeleteProject borra el proyecto y todo lo que cuelga de él en el índice local
+// (planos, tareas, aprobaciones, revisiones, eventos). No toca git.
+func (s *Store) DeleteProject(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmts := []string{
+		`DELETE FROM approvals WHERE branch_id IN (SELECT id FROM branches WHERE project_id=?)`,
+		`DELETE FROM branch_files WHERE branch_id IN (SELECT id FROM branches WHERE project_id=?)`,
+		`DELETE FROM branches WHERE project_id=?`,
+		`DELETE FROM revisions WHERE project_id=?`,
+		`DELETE FROM drawings WHERE project_id=?`,
+		`DELETE FROM project_approvers WHERE project_id=?`,
+		`DELETE FROM events WHERE project_id=?`,
+		`DELETE FROM projects WHERE id=?`,
+	}
+	for _, q := range stmts {
+		if _, err := tx.Exec(q, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

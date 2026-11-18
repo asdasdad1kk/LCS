@@ -90,7 +90,33 @@ func (s *Service) refreshReview(repo *vcs.Repo, b *store.Branch) error {
 		return err
 	}
 	b.TreeHash = tree
-	return s.st.SetBranchTree(b.ID, tree)
+	if err := s.st.SetBranchTree(b.ID, tree); err != nil {
+		return err
+	}
+	if b.Status == "open" || b.Status == "review" {
+		s.refreshBranchFiles(repo, b)
+	}
+	return nil
+}
+
+// refreshBranchFiles recalcula, desde git, qué planos de la tarea difieren de la
+// base. La copia en SQLite podía quedar vieja (p. ej. tras subir una revisión) y
+// entonces la tarea decía "no hay cambios subidos" aunque sí los hubiera. Solo
+// compara hashes de blobs: no lee los DWG.
+func (s *Service) refreshBranchFiles(repo *vcs.Repo, b *store.Branch) {
+	base := b.BaseCommit
+	declared := []string{}
+	if meta, err := repo.Meta(b.Name); err == nil && meta != nil {
+		declared = meta.Drawings
+		if base == "" {
+			base = meta.BaseCommit
+		}
+	}
+	files, err := s.branchFileStates(repo, b.Name, base, b.Name, declared)
+	if err != nil || len(files) == 0 {
+		return
+	}
+	_ = s.st.SetBranchFiles(b.ID, files)
 }
 
 // refreshProjectFile relee la cadena de aprobación y el dueño del proyecto
@@ -288,6 +314,7 @@ func (s *Service) reviewState(b *store.Branch) ReviewState {
 		}
 	}
 	st := computeReview(chain, decisions, b.TreeHash, b.AuthorEmail, hasChanges)
+	st.Uploaded = b.Status == "review"
 	st.markMe(s.cfg.Email)
 	return st
 }
@@ -527,6 +554,8 @@ func (s *Service) Decide(branchID, decision, comment string) (*ReviewView, error
 		switch {
 		case !st.Required:
 			return errors.New("el proyecto no tiene aprobadores definidos")
+		case !st.HasChanges && st.Uploaded:
+			return errors.New("el plano subido es idéntico al de main: no hay diferencias que aprobar. Subí una versión con cambios")
 		case !st.HasChanges:
 			return errors.New("la tarea no tiene cambios para aprobar")
 		}

@@ -20,7 +20,7 @@ func TestLocalRemoteWithoutSpawningGit(t *testing.T) {
 	}
 	r := &Repo{Bare: bare, Local: local}
 
-	if _, err := r.CreateBranch("work/x", BranchMeta{Title: "x"}, "tester"); err != nil {
+	if _, err := r.CreateBranch("work/x", &BranchMeta{Title: "x"}, "tester"); err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
 	if _, _, err := r.WriteAndCommit("work/x", "drawings/a.dwg", []byte("dwg"), "add", "tester"); err != nil {
