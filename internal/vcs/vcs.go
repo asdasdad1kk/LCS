@@ -167,6 +167,7 @@ func (r *Repo) HeadOf(branch string) (string, error) {
 }
 
 func (r *Repo) ListWorkBranches() ([]BranchMeta, error) {
+	defer slow("ListWorkBranches")()
 	repo, err := open(r.Local)
 	if err != nil {
 		return nil, err
@@ -298,6 +299,7 @@ func (r *Repo) Pull(branch string) error {
 // SyncBranches mirrors every branch of the shared repository into the local
 // clone. Branches with unpushed commits are kept as-is.
 func (r *Repo) SyncBranches() error {
+	defer slow("SyncBranches")()
 	if err := r.Fetch(); err != nil {
 		return err
 	}
@@ -634,6 +636,7 @@ type TreeEntry struct {
 }
 
 func (r *Repo) ListDrawings(branch string) ([]TreeEntry, error) {
+	defer slow("ListDrawings")()
 	repo, err := open(r.Local)
 	if err != nil {
 		return nil, err

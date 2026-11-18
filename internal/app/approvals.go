@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"lcs/internal/identity"
@@ -237,18 +238,71 @@ func (s *Service) syncBranchState(repo *vcs.Repo, b *store.Branch) {
 	}
 }
 
+// seenState recuerda qué versión del repositorio compartido ya se procesó.
+type seenState struct {
+	token string
+	sig   string
+	at    time.Time
+}
+
+// seenFresh dice si no hace falta ir a mirar el NAS: el token del repositorio
+// compartido (una sola lectura de un archivo pequeño) no cambió desde la última
+// vez. Sin token (repositorio de una versión anterior) se espacia por tiempo.
+func (s *Service) seenFresh(projectID, token string) bool {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	st, ok := s.seen[projectID]
+	if !ok {
+		return false
+	}
+	if token == "" {
+		return time.Since(st.at) < 10*time.Second
+	}
+	return st.token == token && time.Since(st.at) < time.Minute
+}
+
+func (s *Service) markSeen(projectID, token, sig string) {
+	s.seenMu.Lock()
+	s.seen[projectID] = seenState{token: token, sig: sig, at: time.Now()}
+	s.seenMu.Unlock()
+}
+
+func (s *Service) lastSig(projectID string) string {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	return s.seen[projectID].sig
+}
+
 // RefreshReviews trae lo último de la carpeta compartida para un proyecto:
-// ramas nuevas, aprobaciones de otros equipos, cambios en la cadena. Si el
-// clon está ocupado con otra operación no espera: sirve lo que ya hay.
+// ramas nuevas, aprobaciones de otros equipos, cambios en la cadena. Si nada
+// cambió (mismo token) no hace nada; si el clon está ocupado con otra operación
+// no espera: sirve lo que ya hay.
 func (s *Service) RefreshReviews(projectID string) {
-	defer trace("RefreshReviews")()
 	repo := s.repo(projectID)
-	_, err := repo.TryLock(func() error {
+	token := repo.RemoteToken()
+	if s.seenFresh(projectID, token) {
+		return
+	}
+	defer trace("RefreshReviews " + projectID)()
+	// Sin directorio de trabajo, leer y reindexar no necesita el bloqueo del
+	// clon: así una actualización lenta nunca hace esperar a quien sube o aprueba.
+	flight := s.flight(projectID)
+	if !flight.TryLock() {
+		return
+	}
+	defer flight.Unlock()
+	err := func() error {
 		if err := vcs.EnsureClone(repo.Bare, repo.Local); err != nil {
 			return err
 		}
 		if err := repo.SyncBranches(); err != nil {
 			return err
+		}
+		// Mismas ramas en los mismos commits que la vez anterior: no hay nada que releer.
+		sig := repo.RefsSignature()
+		if sig != "" && sig == s.lastSig(projectID) {
+			s.markSeen(projectID, token, sig)
+			return nil
 		}
 		_ = s.refreshProjectFile(projectID, repo)
 
@@ -274,15 +328,24 @@ func (s *Service) RefreshReviews(projectID string) {
 				s.syncBranchState(repo, &known[i])
 			}
 		}
+		s.markSeen(projectID, token, sig)
 		return nil
-	})
+	}()
 	if err != nil {
 		slog.Debug("refrescar aprobaciones", "project", projectID, "err", err)
 	}
 }
 
-// RefreshAllReviews hace RefreshReviews de todos los proyectos, a lo sumo una
-// vez por ttl.
+// flight serializa las actualizaciones de lectura de un proyecto (refrescar,
+// sincronizar) sin tocar el bloqueo de escritura del clon.
+func (s *Service) flight(projectID string) *sync.Mutex {
+	v, _ := s.flights.LoadOrStore(projectID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+// RefreshAllReviews hace RefreshReviews de todos los proyectos a la vez, a lo
+// sumo una vez por ttl. Antes se hacían uno tras otro y la pantalla esperaba la
+// suma de todos.
 func (s *Service) RefreshAllReviews(ttl time.Duration) {
 	s.refreshMu.Lock()
 	if time.Since(s.refreshedAt) < ttl {
@@ -296,9 +359,18 @@ func (s *Service) RefreshAllReviews(ttl time.Duration) {
 	if err != nil {
 		return
 	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
 	for _, p := range projects {
-		s.RefreshReviews(p.ID)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			s.RefreshReviews(id)
+		}(p.ID)
 	}
+	wg.Wait()
 }
 
 // ---------------------------------------------------------------- estado
@@ -362,6 +434,11 @@ func (s *Service) Review(branchID string) (*ReviewView, error) {
 	s.RefreshReviews(b.ProjectID)
 	if fresh, err := s.st.GetBranch(branchID); err == nil && fresh != nil {
 		b = fresh
+	}
+	// Qué planos cambiaron se recalcula siempre desde git (solo compara hashes,
+	// sin red): así el índice local no puede quedar desfasado.
+	if b.Status == "open" || b.Status == "review" {
+		s.refreshBranchFiles(s.repo(b.ProjectID), b)
 	}
 	return s.reviewView(b), nil
 }
@@ -729,13 +806,13 @@ func (s *Service) SetApprovers(projectID string, in []vcs.Approver) (*ApproversV
 // ---------------------------------------------------------------- panel
 
 type PanelItem struct {
-	Branch  store.BranchRow `json:"branch"`
-	Files   int             `json:"files"`
+	Branch store.BranchRow `json:"branch"`
+	Files  int             `json:"files"`
 	// Changed: los planos nuevos de esta versión, para abrirlos y compararlos.
 	Changed []ChangedFile `json:"changed"`
-	Nodes   []Node          `json:"nodes"`
-	MyIndex int             `json:"myIndex"`
-	Next    int             `json:"next"`
+	Nodes   []Node        `json:"nodes"`
+	MyIndex int           `json:"myIndex"`
+	Next    int           `json:"next"`
 }
 
 type Panel struct {

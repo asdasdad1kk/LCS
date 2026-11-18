@@ -137,6 +137,7 @@ func (r *Repo) TryLock(fn func() error) (bool, error) {
 // revisión. Una aprobación se ata a este valor: cualquier cambio en un plano
 // la deja obsoleta, y resubir los mismos bytes no.
 func (r *Repo) DrawingsTreeHash(revision string) (string, error) {
+	defer slow("DrawingsTreeHash")()
 	repo, err := open(r.Local)
 	if err != nil {
 		return "", err
@@ -212,6 +213,7 @@ func (r *Repo) ListFilesWhere(revision, dir string, keep func(name string) bool)
 // IsMerged dice si el extremo de la rama ya forma parte de main. Es la forma
 // de saber, desde cualquier equipo, que una tarea ya fue integrada.
 func (r *Repo) IsMerged(branch string) bool {
+	defer slow("IsMerged")()
 	repo, err := open(r.Local)
 	if err != nil {
 		return false

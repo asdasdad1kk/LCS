@@ -29,6 +29,7 @@ type DrawingChange struct {
 // History walks the commit log of a branch and returns every drawing revision
 // it can derive, newest first. Used to rebuild the SQLite index from git.
 func (r *Repo) History(branch string, limit int) ([]DrawingChange, error) {
+	defer slow("History")()
 	repo, err := open(r.Local)
 	if err != nil {
 		return nil, err
@@ -100,6 +101,7 @@ func (r *Repo) History(branch string, limit int) ([]DrawingChange, error) {
 
 // ChangedSince lists the files that differ between two revisions.
 func (r *Repo) ChangedSince(from, to string) ([]string, error) {
+	defer slow("ChangedSince")()
 	repo, err := open(r.Local)
 	if err != nil {
 		return nil, err

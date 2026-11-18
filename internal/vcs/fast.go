@@ -204,6 +204,8 @@ func (p *plan) tree(src, dst side, h plumbing.Hash) error {
 // archivo es una espera de red); árboles y commits después, en orden, para que
 // nunca exista un árbol sin sus hijos.
 func transfer(src, dst side, tip plumbing.Hash) error {
+	defer slow("transfer")()
+	defer slow("transfer", "objetos", "copiar")()
 	if tip.IsZero() || dst.has(tip) {
 		return nil
 	}
@@ -317,6 +319,12 @@ func (r *Repo) fetch(maxAge time.Duration) error {
 	// vez y alcanza con esta única lectura. Cada minuto se hace igual el
 	// recorrido completo, por si alguien escribió con git a mano.
 	token := readToken(r.Bare)
+	if token == "" {
+		// Repositorio anterior al token: se crea para que desde ahora las
+		// lecturas sin cambios cuesten un solo archivo.
+		bumpToken(r.Bare)
+		token = readToken(r.Bare)
+	}
 	if token != "" {
 		if last, ok := tokens.get(r.Local); ok && last.token == token && time.Since(last.at) < time.Minute {
 			return nil
@@ -332,6 +340,7 @@ func (r *Repo) fetch(maxAge time.Duration) error {
 }
 
 func (r *Repo) fetchFull() error {
+	defer slow("fetchFull")()
 	bare, err := git.PlainOpen(r.Bare)
 	if err != nil {
 		return err
@@ -647,6 +656,7 @@ func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 
 // FileInfoAt devuelve el hash del blob y su tamaño sin leer el contenido.
 func (r *Repo) FileInfoAt(revision, p string) (string, int64, error) {
+	defer slow("FileInfoAt")()
 	repo, err := open(r.Local)
 	if err != nil {
 		return "", 0, err
@@ -725,14 +735,17 @@ func (t *timeMap) get(k string) (time.Time, bool) {
 
 func (t *timeMap) set(k string, v time.Time) { t.m.Store(k, v) }
 
-// blobSize lee el tamaño de un blob. En un archivo suelto alcanza con la
-// cabecera comprimida; BlobObject de go-git descomprime el plano entero (un DWG
-// de 150 MB) solo para decir cuánto pesa.
+// blobSize lee el tamaño de un blob sin leer su contenido: la cabecera del
+// archivo suelto o, si está empaquetado, el tamaño que registra el paquete.
+// BlobObject de go-git descomprime el plano entero (un DWG de 150 MB) solo para
+// decir cuánto pesa. El resultado se recuerda: un blob nunca cambia.
 func (r *Repo) blobSize(repo *git.Repository, h plumbing.Hash) int64 {
+	if v, ok := sizeCache.Load(h); ok {
+		return v.(int64)
+	}
+	size := int64(-1)
 	if f, err := os.Open(loosePath(localGitDir(r.Local), h)); err == nil {
-		defer f.Close()
 		if zr, err := zlib.NewReader(f); err == nil {
-			defer zr.Close()
 			hdr := make([]byte, 0, 32)
 			one := make([]byte, 1)
 			for len(hdr) < 32 {
@@ -743,17 +756,64 @@ func (r *Repo) blobSize(repo *git.Repository, h plumbing.Hash) int64 {
 					if i := bytes.IndexByte(hdr, ' '); i > 0 {
 						var n int64
 						if _, err := fmt.Sscanf(string(hdr[i+1:]), "%d", &n); err == nil {
-							return n
+							size = n
 						}
 					}
 					break
 				}
 				hdr = append(hdr, one[0])
 			}
+			zr.Close()
+		}
+		f.Close()
+	}
+	if size < 0 {
+		if n, err := repo.Storer.EncodedObjectSize(h); err == nil {
+			size = n
 		}
 	}
-	if blob, err := repo.BlobObject(h); err == nil {
-		return blob.Size
+	if size < 0 {
+		return 0
 	}
-	return 0
+	sizeCache.Store(h, size)
+	return size
+}
+
+// RemoteToken es el token de cambios del repositorio compartido ("" si no existe).
+func (r *Repo) RemoteToken() string { return readToken(r.Bare) }
+
+// RefsSignature resume en qué commit está cada rama local (y main). Si no
+// cambió, tampoco cambió nada de lo que LCS indexa.
+func (r *Repo) RefsSignature() string {
+	repo, err := open(r.Local)
+	if err != nil {
+		return ""
+	}
+	iter, err := repo.References()
+	if err != nil {
+		return ""
+	}
+	defer iter.Close()
+	var parts []string
+	_ = iter.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Name().IsBranch() && ref.Type() == plumbing.HashReference {
+			parts = append(parts, ref.Name().Short()+"="+ref.Hash().String())
+		}
+		return nil
+	})
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
+}
+
+var sizeCache sync.Map // hash del blob → tamaño (un blob nunca cambia)
+
+// slow registra en el log lo que tarda más de medio segundo, con el detalle de
+// qué paso fue. Sirve para ubicar en la próxima revisión dónde se va el tiempo.
+func slow(op string, kv ...any) func() {
+	start := time.Now()
+	return func() {
+		if d := time.Since(start); d > 500*time.Millisecond {
+			slog.Info("git lento", append([]any{"op", op, "dur", d.Round(time.Millisecond).String()}, kv...)...)
+		}
+	}
 }

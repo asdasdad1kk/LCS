@@ -30,7 +30,7 @@ type Service struct {
 
 	// Cuándo se trajo por última vez lo de la carpeta compartida (ver
 	// RefreshAllReviews y MaybeDiscover).
-	refreshMu    sync.Mutex
+	refreshMu sync.Mutex
 
 	// Uso de disco por proyecto: recorrer el repo del NAS entero en cada carga
 	// de pantalla era carísimo, así que se calcula en segundo plano y se cachea.
@@ -41,12 +41,22 @@ type Service struct {
 	// recorrer de nuevo el historial.
 	indexedMu   sync.Mutex
 	indexedMain map[string]string
+
+	// Qué versión del repositorio compartido ya se procesó (ver RefreshReviews).
+	seenMu  sync.Mutex
+	seen    map[string]seenState
+	flights sync.Map // proyecto → *sync.Mutex
+
+	// Firma de refs de la última reconciliación completa por proyecto.
+	reconMu      sync.Mutex
+	reconSig     map[string]string
 	refreshedAt  time.Time
 	discoveredAt time.Time
 }
 
 func New(cfg *config.Config, st *store.Store) *Service {
-	return &Service{cfg: cfg, st: st, usage: map[string]*usageEntry{}, indexedMain: map[string]string{}}
+	return &Service{cfg: cfg, st: st, usage: map[string]*usageEntry{}, indexedMain: map[string]string{},
+		seen: map[string]seenState{}, reconSig: map[string]string{}}
 }
 
 func (s *Service) Config() *config.Config { return s.cfg }
@@ -182,7 +192,13 @@ func (s *Service) Sync(projectID string) error {
 		return fmt.Errorf("proyecto %s no existe", projectID)
 	}
 	repo := s.repo(projectID)
-	return repo.WithLock(func() error { return s.reconcileLocked(projectID, repo) })
+	// Sincronizar solo lee git y escribe el índice local: no necesita el
+	// bloqueo de escritura del clon (con él, una sincronización de un minuto
+	// dejaba esperando a quien subía un plano).
+	flight := s.flight(projectID)
+	flight.Lock()
+	defer flight.Unlock()
+	return s.reconcileLocked(projectID, repo)
 }
 
 func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
@@ -193,6 +209,21 @@ func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
 	if err := repo.Pull(vcs.MainBranch); err != nil {
 		return err
 	}
+	// Mismas ramas en los mismos commits que en la última reconciliación: el
+	// índice ya está al día (releer todos los planos y el historial cuesta
+	// segundos por proyecto sobre el NAS).
+	sig := repo.RefsSignature()
+	s.reconMu.Lock()
+	same := sig != "" && s.reconSig[projectID] == sig
+	s.reconMu.Unlock()
+	if same {
+		return nil
+	}
+	defer func() {
+		s.reconMu.Lock()
+		s.reconSig[projectID] = sig
+		s.reconMu.Unlock()
+	}()
 
 	entries, err := repo.ListDrawings(vcs.MainBranch)
 	if err != nil {
@@ -287,10 +318,30 @@ func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
 }
 
 func (s *Service) backfill(projectID string, repo *vcs.Repo, branch, branchID string) error {
-	hist, err := repo.History(branch, 200)
+	// Una tarea solo necesita sus commits propios (los de main ya están
+	// indexados), y cada commit es un recorrido de árboles: 40 alcanzan.
+	limit := 200
+	if branchID != "" {
+		limit = 40
+	}
+	// Si la rama no avanzó desde la última vez, no hay nada nuevo que indexar.
+	key := projectID + "/" + branch
+	head, _ := repo.HeadOf(branch)
+	s.indexedMu.Lock()
+	same := head != "" && s.indexedMain[key] == head
+	s.indexedMu.Unlock()
+	if same {
+		return nil
+	}
+	hist, err := repo.History(branch, limit)
 	if err != nil {
 		return nil // brand new / empty branch
 	}
+	defer func() {
+		s.indexedMu.Lock()
+		s.indexedMain[key] = head
+		s.indexedMu.Unlock()
+	}()
 	for _, ch := range hist {
 		_ = s.st.AddRevision(&store.Revision{
 			ID:          revisionID(ch.Commit, ch.Path),

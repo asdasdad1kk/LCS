@@ -64,6 +64,12 @@ func (s *Service) forgetProject(id string) error {
 		if err := os.RemoveAll(repo.Local); err != nil {
 			return err
 		}
+		s.seenMu.Lock()
+		delete(s.seen, id)
+		s.seenMu.Unlock()
+		s.reconMu.Lock()
+		delete(s.reconSig, id)
+		s.reconMu.Unlock()
 		s.usageMu.Lock()
 		delete(s.usage, id)
 		s.usageMu.Unlock()
