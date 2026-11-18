@@ -155,9 +155,22 @@ export type ReviewView = {
   overlaps: Overlap[]
 }
 
+export type ChangedFile = { path: string; name: string; drawingId: string; size: number }
+
+export type TaskStage = 'open' | 'review' | 'approving' | 'ready' | 'merged' | 'closed'
+
+export type TaskRow = {
+  branch: Branch & { projectName: string }
+  nodes: ReviewNode[]
+  files: ChangedFile[]
+  timeline: TimelineItem[]
+  stage: TaskStage
+}
+
 export type PanelItem = {
   branch: Branch & { projectName: string }
   files: number
+  changed: ChangedFile[]
   nodes: ReviewNode[]
   myIndex: number
   next: number
@@ -278,8 +291,13 @@ export const api = {
       return b
     }),
   stats: () => req<Record<string, number | string>>('/api/stats'),
-  activity: (project?: string) =>
-    req<ActivityEvent[]>(`/api/activity${project ? `?project=${project}` : ''}`),
+  activity: (projects?: string[] | string, limit = 60) => {
+    const list = Array.isArray(projects) ? projects.join(',') : (projects ?? '')
+    return req<ActivityEvent[]>(`/api/activity?limit=${limit}${list ? `&project=${encodeURIComponent(list)}` : ''}`)
+  },
+  /** Tareas con su estado y línea de tiempo (de uno o varios proyectos). */
+  timeline: (projects: string[] = [], status = 'all') =>
+    req<TaskRow[]>(`/api/timeline?status=${status}${projects.length ? `&projects=${encodeURIComponent(projects.join(','))}` : ''}`),
 
   projects: () => req<Project[]>('/api/projects'),
   createProject: (body: { name: string; description?: string; parentId?: string }) =>
@@ -325,7 +343,7 @@ export const api = {
   addSnapshot: (
     id: string,
     image: Blob,
-    meta: { caption?: string; drawing?: string; layout?: string }
+    meta: { caption?: string; drawing?: string; layout?: string; bounds?: string }
   ) => {
     const form = new FormData()
     form.append('image', image, 'recorte.png')
@@ -417,6 +435,8 @@ export type Snapshot = {
   email: string
   drawing?: string
   layout?: string
+  /** La zona en coordenadas del plano, para volver a enfocarla en cualquier versión. */
+  bounds?: { minX: number; minY: number; maxX: number; maxY: number }
   at: number
   size: number
 }

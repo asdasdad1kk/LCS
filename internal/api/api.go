@@ -31,6 +31,7 @@ func (a *API) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/bootstrap", a.wrap(a.bootstrap))
 	mux.HandleFunc("GET /api/stats", a.wrap(a.stats))
 	mux.HandleFunc("GET /api/activity", a.wrap(a.activity))
+	mux.HandleFunc("GET /api/timeline", a.wrap(a.timeline))
 
 	mux.HandleFunc("GET /api/projects", a.wrap(a.listProjects))
 	mux.HandleFunc("POST /api/projects", a.wrap(a.createProject))
@@ -134,8 +135,17 @@ func (a *API) stats(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *API) activity(w http.ResponseWriter, r *http.Request) error {
-	projectID := r.URL.Query().Get("project")
-	events, err := a.svc.Store().ListEvents(projectID, 60)
+	var ids []string
+	for _, id := range strings.Split(r.URL.Query().Get("project"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	limit := 60
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 500 {
+		limit = n
+	}
+	events, err := a.svc.Store().ListEventsFor(ids, limit)
 	if err != nil {
 		return err
 	}
@@ -708,8 +718,15 @@ func (a *API) addSnapshot(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	var bounds *app.Bounds
+	if raw := r.FormValue("bounds"); raw != "" {
+		var b app.Bounds
+		if json.Unmarshal([]byte(raw), &b) == nil && b.MaxX > b.MinX && b.MaxY > b.MinY {
+			bounds = &b
+		}
+	}
 	sn, err := a.svc.AddSnapshot(r.PathValue("id"), app.SnapshotInput{
-		Caption: r.FormValue("caption"), Drawing: r.FormValue("drawing"), Layout: r.FormValue("layout"), PNG: png,
+		Caption: r.FormValue("caption"), Drawing: r.FormValue("drawing"), Layout: r.FormValue("layout"), Bounds: bounds, PNG: png,
 	})
 	if err != nil {
 		return err
@@ -728,5 +745,14 @@ func (a *API) snapshotImage(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	_, _ = io.Copy(w, rd)
+	return nil
+}
+
+func (a *API) timeline(w http.ResponseWriter, r *http.Request) error {
+	rows, err := a.svc.TasksTimeline(strings.Split(r.URL.Query().Get("projects"), ","), r.URL.Query().Get("status"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, rows)
 	return nil
 }

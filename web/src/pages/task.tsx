@@ -9,8 +9,10 @@ import {
   Eye,
   FileBox,
   GitBranch,
+  Columns2,
   GitMerge,
   Images,
+  Target,
   Loader2,
   PencilLine,
   ShieldCheck,
@@ -26,7 +28,8 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatusBadge } from '@/components/status-badge'
-import { CadViewer } from '@/components/cad-viewer'
+import { CadViewer, type Bounds } from '@/components/cad-viewer'
+import { CompareView, type FocusArea, type RefOption } from '@/components/compare-view'
 import { MergeConflictDialog, UploadDialog } from '@/components/dialogs'
 import {
   Dialog,
@@ -53,6 +56,9 @@ export function TaskPage() {
   const [closing, setClosing] = useState(false)
   const [closingBusy, setClosingBusy] = useState(false)
   const [drawingIds, setDrawingIds] = useState<Record<string, string>>({})
+  const [tab, setTab] = useState(searchParams.get('tab') ?? 'files')
+  const [compareFile, setCompareFile] = useState<string | null>(searchParams.get('file'))
+  const [focusArea, setFocusArea] = useState<string | null>(null)
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
   const [openSnap, setOpenSnap] = useState<Snapshot | null>(null)
 
@@ -94,7 +100,7 @@ export function TaskPage() {
 
   // Otras personas aprueban desde sus equipos: mantener el estado al día.
   useEffect(() => {
-    const timer = window.setInterval(loadReview, 20000)
+    const timer = window.setInterval(loadReview, 8000)
     window.addEventListener('focus', loadReview)
     return () => {
       window.clearInterval(timer)
@@ -181,6 +187,32 @@ export function TaskPage() {
       setMerging(false)
     }
   }
+
+  // Comparar: el plano elegido (por defecto, el primero que cambió) y las
+  // versiones disponibles de esta tarea.
+  const changedFiles = files.filter((f) => f.changed)
+  const cmpFile = files.find((f) => f.path === compareFile) ?? changedFiles[0] ?? files[0]
+  const cmpId = cmpFile ? drawingIds[cmpFile.path] : undefined
+  const cmpOptions: RefOption[] = useMemo(() => {
+    if (!branch) return []
+    const out: RefOption[] = []
+    if (branch.baseCommit) out.push({ ref: branch.baseCommit, label: `Base · main al abrir la tarea (${shortSha(branch.baseCommit)})` })
+    out.push({ ref: 'main', label: 'main actual' })
+    const uploads = (review?.timeline ?? []).filter((i) => i.kind === 'upload' && i.commit)
+    uploads.forEach((u, i) =>
+      out.push({ ref: u.commit!, label: `Versión ${i + 1} · ${u.message || 'sin mensaje'} · ${timeAgo(u.at)}` })
+    )
+    out.push({ ref: branch.name, label: 'Última versión de la tarea' })
+    return out
+  }, [branch, review])
+  const areas: FocusArea[] = useMemo(
+    () =>
+      snapshots
+        .filter((s) => s.bounds && (!s.drawing || !cmpFile || s.drawing === fileName(cmpFile.path)))
+        .map((s) => ({ id: s.id, label: s.caption || 'Zona marcada', bounds: s.bounds as Bounds })),
+    [snapshots, cmpFile]
+  )
+
 
   if (loading) {
     return (
@@ -317,10 +349,13 @@ export function TaskPage() {
 
       <div className="grid gap-5 px-6 pb-10 lg:grid-cols-[1.5fr_1fr]">
         <section>
-          <Tabs defaultValue={searchParams.get('tab') ?? 'files'}>
+          <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
               <TabsTrigger value="files">Archivos · {files.length}</TabsTrigger>
               <TabsTrigger value="preview">Vista previa</TabsTrigger>
+              <TabsTrigger value="compare">
+                <Columns2 /> Comparar
+              </TabsTrigger>
               <TabsTrigger value="snaps">Recortes{snapshots.length ? ` · ${snapshots.length}` : ''}</TabsTrigger>
               <TabsTrigger value="history">Línea de tiempo</TabsTrigger>
             </TabsList>
@@ -382,12 +417,17 @@ export function TaskPage() {
                       fileName={fileName(firstFile.path)}
                       refName={branch.name}
                       className="h-full w-full"
+                      changes={areas.map((a) => a.bounds)}
                       onSnapshot={
                         isDone
                           ? undefined
-                          : async (png, caption) => {
+                          : async (png, caption, bounds) => {
                               try {
-                                await api.addSnapshot(branch.id, png, { caption, drawing: fileName(firstFile.path) })
+                                await api.addSnapshot(branch.id, png, {
+                                  caption,
+                                  drawing: fileName(firstFile.path),
+                                  bounds: bounds ? JSON.stringify(bounds) : undefined
+                                })
                                 toast.success('Recorte guardado en la tarea')
                                 void loadSnapshots()
                               } catch (err) {
@@ -408,6 +448,45 @@ export function TaskPage() {
                 Esta vista lee el DWG desde la rama <span className="font-mono">{branch.name}</span>, no
                 desde main.
               </p>
+            </TabsContent>
+
+            <TabsContent value="compare" className="mt-3">
+              {tab === 'compare' &&
+                (cmpFile && cmpId ? (
+                  <div className="space-y-2.5">
+                    {changedFiles.length > 1 && (
+                      <select
+                        value={cmpFile.path}
+                        onChange={(e) => setCompareFile(e.target.value)}
+                        className="bg-background h-8 rounded-md border px-2 text-[12.5px]"
+                      >
+                        {changedFiles.map((f) => (
+                          <option key={f.path} value={f.path}>
+                            {fileName(f.path)}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <CompareView
+                      key={`${cmpId}-${focusArea ?? ''}`}
+                      drawingId={cmpId}
+                      fileName={fileName(cmpFile.path)}
+                      options={cmpOptions}
+                      initialLeft={cmpOptions[0]?.ref ?? 'main'}
+                      initialRight={branch.name}
+                      areas={areas}
+                      selectedArea={focusArea}
+                    />
+                    <p className="text-muted-foreground text-[11px]">
+                      Los dos planos se mueven juntos. Elige qué versión ves de cada lado; con
+                      «Enfocar cambios» ambos van a las zonas que se marcaron con recortes.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="text-muted-foreground rounded-lg border border-dashed py-12 text-center text-[13px]">
+                    Sube una versión para poder compararla con la de main.
+                  </div>
+                ))}
             </TabsContent>
 
             <TabsContent value="snaps" className="mt-3">
@@ -439,6 +518,20 @@ export function TaskPage() {
                         <p className="text-muted-foreground text-[11px]">
                           {s.author} · {timeAgo(s.at)}
                         </p>
+                        {s.bounds && (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setFocusArea(s.id)
+                              setTab('compare')
+                            }}
+                            className="text-primary mt-1 inline-flex items-center gap-1 text-[11.5px] font-medium hover:underline"
+                          >
+                            <Target className="size-3" /> Ver en el plano
+                          </span>
+                        )}
                       </div>
                     </button>
                   ))}
@@ -507,7 +600,15 @@ export function TaskPage() {
         </aside>
       </div>
 
-      <UploadDialog open={uploading} onOpenChange={setUploading} branch={branch} onDone={load} />
+      <UploadDialog
+        open={uploading}
+        onOpenChange={setUploading}
+        branch={branch}
+        onDone={async () => {
+          setTab('compare')
+          await load()
+        }}
+      />
 
       <MergeConflictDialog
         open={!!conflict}

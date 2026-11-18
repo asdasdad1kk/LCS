@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"lcs/internal/vcs"
 )
 
 // Un master recibe un plano de una zona y se abre una tarea sobre él: cada
@@ -124,5 +126,55 @@ func TestSnapshotsStayWithTask(t *testing.T) {
 	rd.Close()
 	if after, _ := svc.Repo(p.ID).DrawingsTreeHash(b.Name); after != treeBefore {
 		t.Fatal("un recorte no debe cambiar drawings/ (invalidaría las aprobaciones)")
+	}
+}
+
+func TestTasksTimelineAndSnapshotBounds(t *testing.T) {
+	svc := newTestService(t)
+	p, _ := svc.CreateProject(CreateProjectInput{Name: "Planta"})
+	if _, err := svc.SetApprovers(p.ID, []vcs.Approver{{Email: "dev@lcs.local"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Import(p.ID, []IncomingFile{{Name: "a.dwg", Content: dwg("v1")}}, "t"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := svc.CreateBranch(CreateBranchInput{ProjectID: p.ID, Drawings: []string{"drawings/a.dwg"}, Title: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := svc.TasksTimeline(nil, "all")
+	if err != nil || len(rows) != 1 || rows[0].Stage != "open" {
+		t.Fatalf("recién abierta: %+v %v", rows, err)
+	}
+	if _, err := svc.Upload(b.ID, IncomingFile{Name: "a.dwg", Content: dwg("v2")}, "m", "t"); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = svc.TasksTimeline([]string{p.ID}, "all")
+	if rows[0].Stage != "approving" || len(rows[0].Files) != 1 || rows[0].Files[0].Name != "a" {
+		t.Fatalf("tras subir: stage=%s files=%+v", rows[0].Stage, rows[0].Files)
+	}
+	if other, _ := svc.TasksTimeline([]string{"no-existe"}, "all"); len(other) != 0 {
+		t.Fatal("el filtro por proyecto no filtra")
+	}
+	// El panel de aprobaciones muestra los planos nuevos.
+	panel, err := svc.ApprovalsPanel()
+	if err != nil || len(panel.Pending) != 1 || len(panel.Pending[0].Changed) != 1 {
+		t.Fatalf("panel: %+v %v", panel, err)
+	}
+	if _, err := svc.Decide(b.ID, "approved", ""); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ = svc.TasksTimeline(nil, "all"); rows[0].Stage != "ready" {
+		t.Fatalf("aprobada: stage=%s", rows[0].Stage)
+	}
+
+	png := append([]byte{0x89}, []byte("PNG\r\n\x1a\n-x")...)
+	bounds := &Bounds{MinX: 10, MinY: 20, MaxX: 110, MaxY: 80}
+	if _, err := svc.AddSnapshot(b.ID, SnapshotInput{PNG: png, Bounds: bounds}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := svc.Snapshots(b.ID)
+	if len(list) != 1 || list[0].Bounds == nil || list[0].Bounds.MaxX != 110 {
+		t.Fatalf("bounds perdidos: %+v", list)
 	}
 }

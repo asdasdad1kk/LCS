@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -162,10 +164,19 @@ func copyObject(src, dst side, h plumbing.Hash) error {
 	return writeLoose(dst.dir, h, obj.Type(), obj.Size(), rd)
 }
 
-func transferTree(src, dst side, h plumbing.Hash) error {
-	if dst.has(h) { // se escribe de abajo hacia arriba: un árbol presente está completo
+// plan junta, sin copiar nada todavía, los objetos que le faltan a dst.
+type plan struct {
+	blobs   []plumbing.Hash // hojas: se copian en paralelo
+	trees   []plumbing.Hash // de abajo hacia arriba
+	commits []plumbing.Hash // del más viejo al más nuevo
+	seen    map[plumbing.Hash]bool
+}
+
+func (p *plan) tree(src, dst side, h plumbing.Hash) error {
+	if p.seen[h] || dst.has(h) { // un árbol presente en dst está completo (se escribe de abajo hacia arriba)
 		return nil
 	}
+	p.seen[h] = true
 	t, err := object.GetTree(src.repo.Storer, h)
 	if err != nil {
 		return err
@@ -173,21 +184,25 @@ func transferTree(src, dst side, h plumbing.Hash) error {
 	for _, e := range t.Entries {
 		switch e.Mode {
 		case filemode.Dir:
-			if err := transferTree(src, dst, e.Hash); err != nil {
+			if err := p.tree(src, dst, e.Hash); err != nil {
 				return err
 			}
 		case filemode.Submodule:
 		default:
-			if err := copyObject(src, dst, e.Hash); err != nil {
-				return err
+			if !p.seen[e.Hash] && !dst.has(e.Hash) {
+				p.seen[e.Hash] = true
+				p.blobs = append(p.blobs, e.Hash)
 			}
 		}
 	}
-	return copyObject(src, dst, h)
+	p.trees = append(p.trees, h)
+	return nil
 }
 
 // transfer copia a dst todo lo que falta para que tip quede completo. Se
-// detiene en los commits que dst ya tiene.
+// detiene en los commits que dst ya tiene. Los blobs viajan en paralelo (cada
+// archivo es una espera de red); árboles y commits después, en orden, para que
+// nunca exista un árbol sin sus hijos.
 func transfer(src, dst side, tip plumbing.Hash) error {
 	if tip.IsZero() || dst.has(tip) {
 		return nil
@@ -209,16 +224,63 @@ func transfer(src, dst side, tip plumbing.Hash) error {
 		order = append(order, c)
 		stack = append(stack, c.ParentHashes...)
 	}
+	pl := &plan{seen: map[plumbing.Hash]bool{}}
 	for i := len(order) - 1; i >= 0; i-- {
-		c := order[i]
-		if err := transferTree(src, dst, c.TreeHash); err != nil {
+		if err := pl.tree(src, dst, order[i].TreeHash); err != nil {
 			return err
 		}
-		if err := copyObject(src, dst, c.Hash); err != nil {
+		pl.commits = append(pl.commits, order[i].Hash)
+	}
+
+	if err := parallelCopy(src, dst, pl.blobs); err != nil {
+		return err
+	}
+	for _, h := range pl.trees {
+		if err := copyObject(src, dst, h); err != nil {
+			return err
+		}
+	}
+	for _, h := range pl.commits {
+		if err := copyObject(src, dst, h); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func parallelCopy(src, dst side, hashes []plumbing.Hash) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	if len(hashes) == 1 {
+		return copyObject(src, dst, hashes[0])
+	}
+	const workers = 8
+	jobs := make(chan plumbing.Hash)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var first error
+	for i := 0; i < workers && i < len(hashes); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for h := range jobs {
+				if err := copyObject(src, dst, h); err != nil {
+					mu.Lock()
+					if first == nil {
+						first = err
+					}
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	for _, h := range hashes {
+		jobs <- h
+	}
+	close(jobs)
+	wg.Wait()
+	return first
 }
 
 func closeRepo(r *git.Repository) {
@@ -249,6 +311,27 @@ func (r *Repo) fetch(maxAge time.Duration) error {
 			return nil
 		}
 	}
+	// Sobre un NAS cada archivo leído es un viaje de red: recorrer todas las
+	// referencias cuesta decenas. Cada escritura de LCS cambia un archivo token
+	// en el repositorio compartido; si sigue igual, nada se movió desde la última
+	// vez y alcanza con esta única lectura. Cada minuto se hace igual el
+	// recorrido completo, por si alguien escribió con git a mano.
+	token := readToken(r.Bare)
+	if token != "" {
+		if last, ok := tokens.get(r.Local); ok && last.token == token && time.Since(last.at) < time.Minute {
+			return nil
+		}
+	}
+	if err := r.fetchFull(); err != nil {
+		return err
+	}
+	if token != "" {
+		tokens.set(r.Local, tokenState{token: token, at: time.Now()})
+	}
+	return nil
+}
+
+func (r *Repo) fetchFull() error {
 	bare, err := git.PlainOpen(r.Bare)
 	if err != nil {
 		return err
@@ -353,8 +436,10 @@ func (r *Repo) publish(local *git.Repository, branch string, tip plumbing.Hash) 
 	if err := bare.Storer.CheckAndSetReference(plumbing.NewHashReference(name, tip), old); err != nil {
 		return git.ErrNonFastForwardUpdate
 	}
+	bumpToken(r.Bare)
 	_ = local.Storer.SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", branch), tip))
 	fetchedAt.set(r.Local, time.Now())
+	tokens.m.Delete(r.Local) // el próximo fetch relee: el token cambió por nuestra propia escritura
 	return nil
 }
 
@@ -503,9 +588,11 @@ func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 	}
 
 	for attempt := 0; attempt < 6; attempt++ {
+		t0 := time.Now()
 		if err := r.Fetch(); err != nil {
 			return plumbing.ZeroHash, err
 		}
+		tFetch := time.Since(t0)
 		base, err := r.tip(repo, from)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("rama %s: %w", from, err)
@@ -538,7 +625,11 @@ func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
+		tBuild := time.Since(t0) - tFetch
 		err = r.publish(repo, spec.Target, hash)
+		if total := time.Since(t0); total > 300*time.Millisecond {
+			slog.Info("commit lento", "rama", spec.Target, "fetch", tFetch.Round(time.Millisecond).String(), "armar", tBuild.Round(time.Millisecond).String(), "publicar", (total - tFetch - tBuild).Round(time.Millisecond).String())
+		}
 		if errors.Is(err, git.ErrNonFastForwardUpdate) {
 			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
 			continue // otro equipo publicó antes: rehacer sobre su punta
@@ -574,6 +665,51 @@ func (r *Repo) FileInfoAt(revision, p string) (string, int64, error) {
 		return "", 0, os.ErrNotExist
 	}
 	return e.Hash.String(), r.blobSize(repo, e.Hash), nil
+}
+
+const tokenFile = "lcs-rev"
+
+type tokenState struct {
+	token string
+	at    time.Time
+}
+
+type tokenMap struct{ m sync.Map }
+
+func (t *tokenMap) get(k string) (tokenState, bool) {
+	v, ok := t.m.Load(k)
+	if !ok {
+		return tokenState{}, false
+	}
+	return v.(tokenState), true
+}
+
+func (t *tokenMap) set(k string, v tokenState) { t.m.Store(k, v) }
+
+var tokens tokenMap
+
+func readToken(bare string) string {
+	b, err := os.ReadFile(filepath.Join(bare, tokenFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// bumpToken avisa a los demás equipos que el repositorio cambió. Se escribe
+// DESPUÉS de mover la referencia: quien lea el token nuevo ya ve la referencia.
+func bumpToken(bare string) {
+	var rnd [8]byte
+	_, _ = rand.Read(rnd[:])
+	val := fmt.Sprintf("%d-%x", time.Now().UnixNano(), rnd)
+	tmp := filepath.Join(bare, tokenFile+".tmp-"+fmt.Sprintf("%x", rnd[:4]))
+	if err := os.WriteFile(tmp, []byte(val), 0o644); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, filepath.Join(bare, tokenFile)); err != nil {
+		_ = os.Remove(tmp)
+		_ = os.WriteFile(filepath.Join(bare, tokenFile), []byte(val), 0o644)
+	}
 }
 
 // timeMap guarda cuándo se trajo por última vez cada clon.

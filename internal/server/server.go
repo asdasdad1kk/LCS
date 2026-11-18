@@ -90,6 +90,9 @@ func (s *Server) logged(next http.Handler) http.Handler {
 		if r.URL.Path == "/api/bootstrap" || r.URL.Path == "/api/stats" {
 			return
 		}
+		if d := time.Since(start); d > 400*time.Millisecond {
+			slog.Info("http lento", "method", r.Method, "path", r.URL.Path, "dur", d.Round(time.Millisecond).String())
+		}
 		slog.Debug("http", "method", r.Method, "path", r.URL.Path, "dur", time.Since(start).String())
 	})
 }

@@ -1,12 +1,29 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { LayoutInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { AlertTriangle, Check, Crop, Download, Loader2, Maximize2, Moon, Sun, X } from 'lucide-react'
+import { AlertTriangle, Check, Crop, Download, Loader2, Maximize2, Moon, Sun, Target, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+
+/** Una zona del plano en coordenadas del dibujo (no de la pantalla). */
+export type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+
+export function unionBounds(list: Bounds[]): Bounds | null {
+  if (!list.length) return null
+  return list.reduce((a, b) => ({
+    minX: Math.min(a.minX, b.minX),
+    minY: Math.min(a.minY, b.minY),
+    maxX: Math.max(a.maxX, b.maxX),
+    maxY: Math.max(a.maxY, b.maxY)
+  }))
+}
 
 export type CadViewerHandle = {
   showLayout: (btrId: string) => void
   fit: () => void
+  /** Encuadra una zona del plano (coordenadas del dibujo). */
+  focusBounds: (b: Bounds, margin?: number) => Promise<void>
+  /** Lo que se ve ahora, en coordenadas del dibujo. */
+  visibleBounds: () => Bounds | null
 }
 
 type Props = {
@@ -20,7 +37,39 @@ type Props = {
    * Si se pasa, el recorte se puede guardar con la tarea además de descargarlo.
    * El visor entrega la imagen PNG y la nota que escribió la persona.
    */
-  onSnapshot?: (png: Blob, caption: string) => Promise<void>
+  onSnapshot?: (png: Blob, caption: string, bounds: Bounds | null) => Promise<void>
+  /** Zona a encuadrar apenas el plano esté listo (y cada vez que cambie). */
+  focus?: Bounds | null
+  /** Zonas marcadas con recortes: habilitan el botón "Enfocar cambios". */
+  changes?: Bounds[]
+  /** Se llama cuando la cámara se mueve (para sincronizar dos visores). */
+  onCamera?: (b: Bounds) => void
+  /** Oculta el botón de recortar (vistas incrustadas de comparación). */
+  noCrop?: boolean
+}
+
+async function zoomToBounds(view: any, b: Bounds, margin = 1.15) {
+  const { AcGeBox2d } = await import('@mlightcad/data-model')
+  view.zoomTo(new AcGeBox2d({ x: b.minX, y: b.minY }, { x: b.maxX, y: b.maxY }), margin)
+}
+
+function readVisible(view: any, host: HTMLElement | null): Bounds | null {
+  try {
+    const canvas = host?.querySelector('canvas') as HTMLCanvasElement | null
+    if (!view || !canvas) return null
+    const w = canvas.clientWidth
+    const h = canvas.clientHeight
+    const a = view.screenToWorld({ x: 0, y: 0 })
+    const b = view.screenToWorld({ x: w, y: h })
+    return {
+      minX: Math.min(a.x, b.x),
+      minY: Math.min(a.y, b.y),
+      maxX: Math.max(a.x, b.x),
+      maxY: Math.max(a.y, b.y)
+    }
+  } catch {
+    return null
+  }
 }
 
 type Bg = 'light' | 'dark'
@@ -133,7 +182,7 @@ function setActiveLayout(view: unknown, btrId: string): boolean {
 }
 
 export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
-  { drawingId, fileName, refName, className, onLayouts, onLoaded, onSnapshot },
+  { drawingId, fileName, refName, className, onLayouts, onLoaded, onSnapshot, focus, changes, onCamera, noCrop },
   ref
 ) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -144,7 +193,7 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
   const [bg, setBg] = useState<Bg>(initialBg)
   const [cropping, setCropping] = useState(false)
   const [drag, setDrag] = useState<Rect | null>(null)
-  const [shot, setShot] = useState<{ url: string; blob: Blob } | null>(null)
+  const [shot, setShot] = useState<{ url: string; blob: Blob; area: Bounds | null } | null>(null)
   const [caption, setCaption] = useState('')
   const [saving, setSaving] = useState(false)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -192,10 +241,27 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
     ctx.fillStyle = bg === 'light' ? '#ffffff' : '#1c1c1e'
     ctx.fillRect(0, 0, out.width, out.height)
     ctx.drawImage(frame, left, top, out.width, out.height, 0, 0, out.width, out.height)
+    // La zona en coordenadas del dibujo: así se puede volver a encuadrar en
+    // cualquier versión del plano, sin depender del tamaño de la ventana.
+    let area: Bounds | null = null
+    try {
+      const ox = hostBox.left - box.left
+      const oy = hostBox.top - box.top
+      const a = view.screenToWorld({ x: ox + r.x, y: oy + r.y })
+      const b = view.screenToWorld({ x: ox + r.x + r.w, y: oy + r.y + r.h })
+      area = {
+        minX: Math.min(a.x, b.x),
+        minY: Math.min(a.y, b.y),
+        maxX: Math.max(a.x, b.x),
+        maxY: Math.max(a.y, b.y)
+      }
+    } catch {
+      /* sin coordenadas: el recorte se guarda igual, solo sin "enfocar" */
+    }
     out.toBlob((blob) => {
       if (!blob) return
       setCaption('')
-      setShot({ url: URL.createObjectURL(blob), blob })
+      setShot({ url: URL.createObjectURL(blob), blob, area })
     }, 'image/png')
   }
 
@@ -216,7 +282,7 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
     if (!shot || !onSnapshot) return
     setSaving(true)
     try {
-      await onSnapshot(shot.blob, caption.trim())
+      await onSnapshot(shot.blob, caption.trim(), shot.area)
       closeShot()
     } catch {
       /* quien llama muestra el error; el recorte queda abierto para reintentar */
@@ -252,6 +318,13 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
       } catch {
         /* ignore */
       }
+    },
+    async focusBounds(b: Bounds, margin?: number) {
+      const view = managerRef.current?.curView
+      if (view) await zoomToBounds(view, b, margin)
+    },
+    visibleBounds() {
+      return readVisible(managerRef.current?.curView, hostRef.current)
     }
   }))
 
@@ -340,6 +413,38 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
     if (state === 'ready') applyBg(bg)
   }, [bg, state, applyBg])
 
+  // Encuadrar la zona pedida cuando el plano termina de cargar o la zona cambia.
+  const focusKey = focus ? [focus.minX, focus.minY, focus.maxX, focus.maxY].join(',') : ''
+  useEffect(() => {
+    if (state !== 'ready' || !focus) return
+    const view = managerRef.current?.curView
+    if (!view) return
+    const id = window.setTimeout(() => void zoomToBounds(view, focus).catch(() => {}), 250)
+    return () => window.clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, focusKey])
+
+  // Aviso de cámara: se compara lo visible cada 150 ms (el visor no emite un evento utilizable).
+  const lastCam = useRef('')
+  useEffect(() => {
+    if (state !== 'ready' || !onCamera) return
+    const id = window.setInterval(() => {
+      const b = readVisible(managerRef.current?.curView, hostRef.current)
+      if (!b) return
+      const key = [b.minX, b.minY, b.maxX, b.maxY].map((n) => n.toFixed(3)).join(',')
+      if (key === lastCam.current) return
+      lastCam.current = key
+      onCamera(b)
+    }, 150)
+    return () => window.clearInterval(id)
+  }, [state, onCamera])
+
+  const focusChanges = () => {
+    const view = managerRef.current?.curView
+    const all = unionBounds(changes ?? [])
+    if (view && all) void zoomToBounds(view, all)
+  }
+
   return (
     <div
       className={cn(
@@ -361,6 +466,17 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
           >
             <Maximize2 className="size-4" />
           </Button>
+          {!!changes?.length && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1 px-2 text-[12px]"
+              title="Ir a las zonas marcadas con recortes"
+              onClick={focusChanges}
+            >
+              <Target className="size-4" /> Enfocar cambios
+            </Button>
+          )}
           <Button
             size="icon"
             variant="ghost"
@@ -370,15 +486,17 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
           >
             {bg === 'light' ? <Moon className="size-4" /> : <Sun className="size-4" />}
           </Button>
-          <Button
-            size="icon"
-            variant={cropping ? 'default' : 'ghost'}
-            className="size-7"
-            title="Recortar una zona del plano"
-            onClick={() => setCropping((c) => !c)}
-          >
-            <Crop className="size-4" />
-          </Button>
+          {!noCrop && (
+            <Button
+              size="icon"
+              variant={cropping ? 'default' : 'ghost'}
+              className="size-7"
+              title="Recortar una zona del plano"
+              onClick={() => setCropping((c) => !c)}
+            >
+              <Crop className="size-4" />
+            </Button>
+          )}
         </div>
       )}
 

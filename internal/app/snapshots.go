@@ -30,14 +30,25 @@ type Snapshot struct {
 	Email   string `json:"email"`
 	Drawing string `json:"drawing,omitempty"`
 	Layout  string `json:"layout,omitempty"`
-	At      int64  `json:"at"`
-	Size    int64  `json:"size"`
+	// Bounds: la zona en coordenadas del plano (no de la pantalla), para volver a
+	// enfocarla en cualquier versión.
+	Bounds *Bounds `json:"bounds,omitempty"`
+	At     int64   `json:"at"`
+	Size   int64   `json:"size"`
+}
+
+type Bounds struct {
+	MinX float64 `json:"minX"`
+	MinY float64 `json:"minY"`
+	MaxX float64 `json:"maxX"`
+	MaxY float64 `json:"maxY"`
 }
 
 type SnapshotInput struct {
 	Caption string
 	Drawing string
 	Layout  string
+	Bounds  *Bounds
 	PNG     []byte
 }
 
@@ -65,7 +76,7 @@ func (s *Service) AddSnapshot(branchID string, in SnapshotInput) (*Snapshot, err
 	id := fmt.Sprintf("%013d-%s", now, randomHex(2))
 	meta := Snapshot{
 		ID: id, Caption: strings.TrimSpace(in.Caption), Author: identity.NameOf(me), Email: me,
-		Drawing: in.Drawing, Layout: in.Layout, At: now, Size: int64(len(in.PNG)),
+		Drawing: in.Drawing, Layout: in.Layout, Bounds: in.Bounds, At: now, Size: int64(len(in.PNG)),
 	}
 	raw, _ := json.MarshalIndent(meta, "", "  ")
 

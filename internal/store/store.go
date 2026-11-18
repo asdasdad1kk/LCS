@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -723,4 +724,36 @@ func (s *Store) DeleteProject(id string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ListEventsFor devuelve los eventos de varios proyectos (todos si ids está vacío).
+func (s *Store) ListEventsFor(ids []string, limit int) ([]Event, error) {
+	if len(ids) == 0 {
+		return s.ListEvents("", limit)
+	}
+	if limit <= 0 {
+		limit = 40
+	}
+	ph := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	for i, id := range ids {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, limit)
+	rows, err := s.db.Query(`SELECT id,project_id,branch_id,kind,actor,payload,created_at FROM events
+		WHERE project_id IN (`+strings.Join(ph, ",")+`) ORDER BY id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Event{}
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.ProjectID, &e.BranchID, &e.Kind, &e.Actor, &e.Payload, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }

@@ -279,9 +279,11 @@ func (r *Repo) DeleteBranch(name string) error {
 	if bare, err := git.PlainOpen(r.Bare); err == nil {
 		_ = bare.Storer.RemoveReference(branchRef(name))
 		closeRepo(bare)
+		bumpToken(r.Bare)
 	}
 	_ = repo.Storer.RemoveReference(plumbing.NewRemoteReferenceName("origin", name))
 	fetchedAt.set(r.Local, time.Time{})
+	tokens.m.Delete(r.Local)
 	return repo.Storer.RemoveReference(branchRef(name))
 }
 

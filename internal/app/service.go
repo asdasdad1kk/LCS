@@ -72,6 +72,7 @@ type CreateProjectInput struct {
 }
 
 func (s *Service) CreateProject(in CreateProjectInput) (*store.Project, error) {
+	defer trace("CreateProject")()
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return nil, errors.New("el nombre del proyecto es obligatorio")
@@ -172,6 +173,7 @@ func randomHex(n int) string {
 
 // Sync refreshes the local clone and rebuilds the SQLite index from git.
 func (s *Service) Sync(projectID string) error {
+	defer trace("Sync")()
 	project, err := s.st.GetProject(projectID)
 	if err != nil {
 		return err
@@ -350,6 +352,7 @@ type IncomingFile struct {
 
 // Import copies DWG files into drawings/ on main and publishes them.
 func (s *Service) Import(projectID string, files []IncomingFile, actor string) (map[string]string, error) {
+	defer trace("Import")()
 	if len(files) == 0 {
 		return nil, errors.New("no se recibió ningún archivo")
 	}
@@ -478,6 +481,7 @@ type BranchView struct {
 }
 
 func (s *Service) CreateBranch(in CreateBranchInput) (*store.Branch, error) {
+	defer trace("CreateBranch")()
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		return nil, errors.New("la tarea necesita un título")
@@ -589,6 +593,7 @@ func (s *Service) BranchView(branchID string) (*BranchView, error) {
 
 // Upload replaces the drawing content of a work branch.
 func (s *Service) Upload(branchID string, file IncomingFile, message, actor string) (*store.Branch, error) {
+	defer trace("Upload")()
 	b, err := s.st.GetBranch(branchID)
 	if err != nil || b == nil {
 		return nil, errors.New("rama no encontrada")
@@ -680,6 +685,7 @@ func matchTarget(files []store.BranchFile, uploaded string) string {
 
 // Merge approves a work branch and publishes it to main.
 func (s *Service) Merge(branchID, strategy, actor string) (*vcs.MergeResult, error) {
+	defer trace("Merge")()
 	b, err := s.st.GetBranch(branchID)
 	if err != nil || b == nil {
 		return nil, errors.New("rama no encontrada")

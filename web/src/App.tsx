@@ -8,10 +8,12 @@ import { DrawingPage } from '@/pages/drawing'
 import { TaskPage } from '@/pages/task'
 import { TasksPage } from '@/pages/tasks'
 import { ActivityPage } from '@/pages/activity'
+import { EmbedViewerPage } from '@/pages/embed-viewer'
 
 export default function App() {
   return (
     <Routes>
+      <Route path="embed/viewer" element={<EmbedViewerPage />} />
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
         <Route path="proyectos" element={<ProjectsPage />} />

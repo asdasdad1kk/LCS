@@ -241,6 +241,7 @@ func (s *Service) syncBranchState(repo *vcs.Repo, b *store.Branch) {
 // ramas nuevas, aprobaciones de otros equipos, cambios en la cadena. Si el
 // clon está ocupado con otra operación no espera: sirve lo que ya hay.
 func (s *Service) RefreshReviews(projectID string) {
+	defer trace("RefreshReviews")()
 	repo := s.repo(projectID)
 	_, err := repo.TryLock(func() error {
 		if err := vcs.EnsureClone(repo.Bare, repo.Local); err != nil {
@@ -362,6 +363,11 @@ func (s *Service) Review(branchID string) (*ReviewView, error) {
 	if fresh, err := s.st.GetBranch(branchID); err == nil && fresh != nil {
 		b = fresh
 	}
+	return s.reviewView(b), nil
+}
+
+// reviewView arma la vista desde el índice local, sin ir a la red.
+func (s *Service) reviewView(b *store.Branch) *ReviewView {
 	st := s.reviewState(b)
 	my := st.myIndex(s.cfg.Email)
 	active := b.Status == "open" || b.Status == "review"
@@ -372,7 +378,7 @@ func (s *Service) Review(branchID string) (*ReviewView, error) {
 		CanAct:      active && st.HasChanges && my >= 0 && st.Next == my,
 		Timeline:    s.timeline(b, st),
 		Overlaps:    s.overlaps(b),
-	}, nil
+	}
 }
 
 func (s *Service) timeline(b *store.Branch, st ReviewState) []TimelineItem {
@@ -514,6 +520,7 @@ func (s *Service) Editing(projectID string, fresh bool) map[string][]Editor {
 
 // Decide registra la aprobación o el rechazo del usuario de esta máquina.
 func (s *Service) Decide(branchID, decision, comment string) (*ReviewView, error) {
+	defer trace("Decide")()
 	decision = strings.TrimSpace(decision)
 	comment = strings.TrimSpace(comment)
 	if decision != "approved" && decision != "rejected" {
@@ -599,7 +606,11 @@ func (s *Service) Decide(branchID, decision, comment string) (*ReviewView, error
 	_ = s.st.AddEvent(b.ProjectID, b.ID, "branch."+decision, me, map[string]any{
 		"branch": b.Title, "comment": comment,
 	})
-	return s.Review(branchID)
+	// Ya se refrescó todo dentro del bloqueo: no se repite el viaje al NAS.
+	if fresh, err := s.st.GetBranch(branchID); err == nil && fresh != nil {
+		b = fresh
+	}
+	return s.reviewView(b), nil
 }
 
 // ---------------------------------------------------------------- cadena
@@ -720,6 +731,8 @@ func (s *Service) SetApprovers(projectID string, in []vcs.Approver) (*ApproversV
 type PanelItem struct {
 	Branch  store.BranchRow `json:"branch"`
 	Files   int             `json:"files"`
+	// Changed: los planos nuevos de esta versión, para abrirlos y compararlos.
+	Changed []ChangedFile `json:"changed"`
 	Nodes   []Node          `json:"nodes"`
 	MyIndex int             `json:"myIndex"`
 	Next    int             `json:"next"`
@@ -760,7 +773,7 @@ func (s *Service) ApprovalsPanel() (*Panel, error) {
 				changed++
 			}
 		}
-		item := PanelItem{Branch: row, Files: changed, Nodes: st.Nodes, MyIndex: idx, Next: st.Next}
+		item := PanelItem{Branch: row, Files: changed, Changed: s.changedFiles(&b), Nodes: st.Nodes, MyIndex: idx, Next: st.Next}
 		switch {
 		case st.Next == idx:
 			panel.Pending = append(panel.Pending, item)

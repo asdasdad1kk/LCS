@@ -76,7 +76,7 @@ export function AppShell() {
 
   useEffect(() => {
     void loadApprovals()
-    const timer = window.setInterval(loadApprovals, 30000)
+    const timer = window.setInterval(loadApprovals, 20000)
     window.addEventListener('focus', loadApprovals)
     return () => {
       window.clearInterval(timer)

@@ -86,6 +86,7 @@ func (s *Service) ZoneChanges(sub *store.Project) (ZoneChanges, error) {
 // strategy "take-branch" imposes the zone's version when the master has edited
 // the same files since the last integration.
 func (s *Service) IntegrateZone(zoneID, strategy, actor string) (*vcs.MergeResult, error) {
+	defer trace("IntegrateZone")()
 	sub, err := s.st.GetProject(zoneID)
 	if err != nil {
 		return nil, err
