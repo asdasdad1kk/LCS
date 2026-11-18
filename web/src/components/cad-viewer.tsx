@@ -17,6 +17,16 @@ export function unionBounds(list: Bounds[]): Bounds | null {
   }))
 }
 
+/** Recuadro sobre el plano, en coordenadas del dibujo (zonas con cambios detectados). */
+export type Overlay = { bounds: Bounds; kind: 'added' | 'removed' | 'modified' | 'mixed'; label?: string }
+
+const OVERLAY_TONE: Record<Overlay['kind'], string> = {
+  added: 'border-emerald-500 bg-emerald-500/10 text-emerald-600',
+  removed: 'border-red-500 bg-red-500/10 text-red-600',
+  modified: 'border-amber-500 bg-amber-500/10 text-amber-600',
+  mixed: 'border-violet-500 bg-violet-500/10 text-violet-600'
+}
+
 export type CadViewerHandle = {
   showLayout: (btrId: string) => void
   fit: () => void
@@ -46,6 +56,8 @@ type Props = {
   onCamera?: (b: Bounds) => void
   /** Oculta el botón de recortar (vistas incrustadas de comparación). */
   noCrop?: boolean
+  /** Zonas a marcar con un recuadro que sigue al zoom y al desplazamiento. */
+  overlays?: Overlay[]
 }
 
 async function zoomToBounds(view: any, b: Bounds, margin = 1.15) {
@@ -182,7 +194,7 @@ function setActiveLayout(view: unknown, btrId: string): boolean {
 }
 
 export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
-  { drawingId, fileName, refName, className, onLayouts, onLoaded, onSnapshot, focus, changes, onCamera, noCrop },
+  { drawingId, fileName, refName, className, onLayouts, onLoaded, onSnapshot, focus, changes, onCamera, noCrop, overlays },
   ref
 ) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -439,6 +451,46 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
     return () => window.clearInterval(id)
   }, [state, onCamera])
 
+  // Recuadros: se recalculan sobre la pantalla cuando la cámara se mueve.
+  const [boxes, setBoxes] = useState<{ l: number; t: number; w: number; h: number; kind: Overlay['kind']; label?: string }[]>([])
+  const overlayKey = overlays?.map((o) => [o.bounds.minX, o.bounds.minY, o.bounds.maxX, o.bounds.maxY, o.kind].join(',')).join(';') ?? ''
+  useEffect(() => {
+    if (state !== 'ready' || !overlays?.length) {
+      setBoxes([])
+      return
+    }
+    let last = ''
+    const compute = () => {
+      const view = managerRef.current?.curView
+      if (!view) return
+      try {
+        const next = overlays.map((o) => {
+          const a = view.worldToScreen({ x: o.bounds.minX, y: o.bounds.minY })
+          const b = view.worldToScreen({ x: o.bounds.maxX, y: o.bounds.maxY })
+          return {
+            l: Math.min(a.x, b.x),
+            t: Math.min(a.y, b.y),
+            w: Math.abs(b.x - a.x),
+            h: Math.abs(b.y - a.y),
+            kind: o.kind,
+            label: o.label
+          }
+        })
+        const key = next.map((n) => [n.l, n.t, n.w, n.h].map((v) => Math.round(v)).join(',')).join(';')
+        if (key !== last) {
+          last = key
+          setBoxes(next)
+        }
+      } catch {
+        /* el visor puede estar reconstruyéndose */
+      }
+    }
+    compute()
+    const id = window.setInterval(compute, 120)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, overlayKey])
+
   const focusChanges = () => {
     const view = managerRef.current?.curView
     const all = unionBounds(changes ?? [])
@@ -454,6 +506,20 @@ export const CadViewer = forwardRef<CadViewerHandle, Props>(function CadViewer(
       )}
     >
       <div ref={hostRef} className="absolute inset-0" />
+
+      {boxes.map((b, i) => (
+        <div
+          key={i}
+          className={cn('pointer-events-none absolute z-[5] rounded-sm border-2', OVERLAY_TONE[b.kind])}
+          style={{ left: b.l, top: b.t, width: Math.max(b.w, 8), height: Math.max(b.h, 8) }}
+        >
+          {b.label && (
+            <span className="bg-card/90 absolute -top-5 left-0 rounded px-1 text-[10.5px] font-medium whitespace-nowrap shadow-sm">
+              {b.label}
+            </span>
+          )}
+        </div>
+      ))}
 
       {state === 'ready' && (
         <div className="bg-card/90 absolute top-2 right-2 z-10 flex gap-1 rounded-md border p-1 shadow-sm backdrop-blur">

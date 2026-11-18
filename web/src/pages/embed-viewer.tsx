@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { CadViewer, type Bounds, type CadViewerHandle } from '@/components/cad-viewer'
+import { CadViewer, type Bounds, type CadViewerHandle, type Overlay } from '@/components/cad-viewer'
 
 /**
  * Visor sin marco para incrustar en un iframe. El motor CAD es un singleton por
@@ -10,6 +10,7 @@ import { CadViewer, type Bounds, type CadViewerHandle } from '@/components/cad-v
  *   hijo → padre  { lcs: 'camera', b }   la cámara se movió
  *   padre → hijo  { lcs: 'view',   b }   copiar esta vista (sincronía)
  *                 { lcs: 'focus',  b }   encuadrar esta zona
+ *                 { lcs: 'regions', list } recuadros de cambios detectados
  */
 export function EmbedViewerPage() {
   const [params] = useSearchParams()
@@ -20,6 +21,7 @@ export function EmbedViewerPage() {
   const quietUntil = useRef(0)
   const [ready, setReady] = useState(false)
   const pending = useRef<{ lcs: string; b: Bounds } | null>(null)
+  const [overlays, setOverlays] = useState<Overlay[]>([])
 
   const apply = useCallback((msg: { lcs: string; b: Bounds }) => {
     const v = viewer.current
@@ -36,7 +38,12 @@ export function EmbedViewerPage() {
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return
       const d = e.data
-      if (!d || typeof d !== 'object' || (d.lcs !== 'view' && d.lcs !== 'focus') || !d.b) return
+      if (!d || typeof d !== 'object') return
+      if (d.lcs === 'regions' && Array.isArray(d.list)) {
+        setOverlays(d.list as Overlay[])
+        return
+      }
+      if ((d.lcs !== 'view' && d.lcs !== 'focus') || !d.b) return
       apply(d)
     }
     window.addEventListener('message', onMessage)
@@ -65,6 +72,7 @@ export function EmbedViewerPage() {
         refName={refName}
         className="h-full w-full"
         noCrop
+        overlays={overlays}
         onCamera={onCamera}
         onLoaded={() => {
           setReady(true)

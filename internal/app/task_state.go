@@ -1,6 +1,10 @@
 package app
 
-import "errors"
+import (
+	"errors"
+
+	"lcs/internal/store"
+)
 
 var errorsNew = errors.New
 
@@ -9,8 +13,10 @@ var errorsNew = errors.New
 // terminar: la pantalla se actualiza con la respuesta y no con otra ronda de
 // consultas.
 type TaskState struct {
-	Branch *BranchView `json:"branch"`
-	Review *ReviewView `json:"review"`
+	// Analyses: resúmenes de los cambios detectados, del más viejo al más nuevo.
+	Analyses []store.Analysis `json:"analyses"`
+	Branch   *BranchView      `json:"branch"`
+	Review   *ReviewView      `json:"review"`
 }
 
 func (s *Service) TaskState(branchID string) (*TaskState, error) {
@@ -18,7 +24,11 @@ func (s *Service) TaskState(branchID string) (*TaskState, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TaskState{Branch: bv, Review: s.reviewView(&bv.Branch)}, nil
+	list, _ := s.st.ListAnalyses(bv.Branch.ID)
+	if list == nil {
+		list = []store.Analysis{}
+	}
+	return &TaskState{Branch: bv, Review: s.reviewView(&bv.Branch), Analyses: list}, nil
 }
 
 // FreshTaskState refresca el proyecto (barato si nada cambió) y lee el estado.

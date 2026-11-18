@@ -65,6 +65,8 @@ func (a *API) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/branches/{id}/download", a.wrap(a.download))
 	mux.HandleFunc("POST /api/branches/{id}/merge", a.wrap(a.merge))
 	mux.HandleFunc("POST /api/branches/{id}/close", a.wrap(a.closeBranch))
+	mux.HandleFunc("GET /api/branches/{id}/analysis/{aid}", a.wrap(a.analysisDoc))
+	mux.HandleFunc("POST /api/branches/{id}/analysis", a.wrap(a.addAnalysis))
 	mux.HandleFunc("GET /api/branches/{id}/snapshots", a.wrap(a.listSnapshots))
 	mux.HandleFunc("POST /api/branches/{id}/snapshots", a.wrap(a.addSnapshot))
 	mux.HandleFunc("GET /api/branches/{id}/snapshots/{sid}", a.wrap(a.snapshotImage))
@@ -778,5 +780,32 @@ func (a *API) taskState(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, 200, st)
+	return nil
+}
+
+func (a *API) addAnalysis(w http.ResponseWriter, r *http.Request) error {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 5<<20))
+	if err != nil {
+		return err
+	}
+	an, err := a.svc.AddAnalysis(r.PathValue("id"), body)
+	if err != nil {
+		return err
+	}
+	state, _ := a.svc.TaskState(r.PathValue("id"))
+	writeJSON(w, 201, map[string]any{"analysis": an, "state": state})
+	return nil
+}
+
+func (a *API) analysisDoc(w http.ResponseWriter, r *http.Request) error {
+	rd, size, err := a.svc.AnalysisDoc(r.PathValue("id"), r.PathValue("aid"))
+	if err != nil {
+		return err
+	}
+	defer rd.Close()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	_, _ = io.Copy(w, rd)
 	return nil
 }

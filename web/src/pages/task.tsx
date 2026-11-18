@@ -11,6 +11,7 @@ import {
   GitBranch,
   Columns2,
   GitMerge,
+  ScanSearch,
   Images,
   Target,
   Loader2,
@@ -20,7 +21,9 @@ import {
   Upload
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, ApiError, type Branch, type ReviewView, type Snapshot, type TaskState } from '@/lib/api'
+import { api, ApiError, type AnalysisRow, type Branch, type ReviewView, type Snapshot, type TaskState } from '@/lib/api'
+import { analyzeVersions } from '@/lib/dwg-analyze-client'
+import { ChangesPanel } from '@/components/changes-panel'
 import { ApprovalActions, ApprovalChain } from '@/components/approval-chain'
 import { BranchTimeline } from '@/components/branch-timeline'
 import { Button } from '@/components/ui/button'
@@ -28,7 +31,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatusBadge } from '@/components/status-badge'
-import { CadViewer, type Bounds } from '@/components/cad-viewer'
+import { CadViewer, type Bounds, type Overlay } from '@/components/cad-viewer'
 import { CompareView, type FocusArea, type RefOption } from '@/components/compare-view'
 import { MergeConflictDialog, UploadDialog } from '@/components/dialogs'
 import {
@@ -60,6 +63,9 @@ export function TaskPage() {
   const [compareFile, setCompareFile] = useState<string | null>(searchParams.get('file'))
   const [focusArea, setFocusArea] = useState<string | null>(null)
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [analyses, setAnalyses] = useState<AnalysisRow[]>([])
+  const [analysisPath, setAnalysisPath] = useState<string | null>(searchParams.get('file'))
+  const [running, setRunning] = useState<{ path: string; msg: string } | null>(null)
   const [openSnap, setOpenSnap] = useState<Snapshot | null>(null)
 
   const loadSnapshots = useCallback(async () => {
@@ -77,6 +83,7 @@ export function TaskPage() {
     if (!s) return
     setBranch(s.branch)
     setReview(s.review)
+    setAnalyses(s.analyses ?? [])
   }, [])
 
   const loadReview = useCallback(async () => {
@@ -210,13 +217,104 @@ export function TaskPage() {
     out.push({ ref: branch.name, label: 'Última versión de la tarea' })
     return out
   }, [branch, review])
-  const areas: FocusArea[] = useMemo(
+  // El análisis más reciente del plano que se está mirando: sus zonas con
+  // cambios se dibujan sobre el plano y alimentan "Enfocar cambios".
+  const latestOf = (path?: string) => analyses.filter((a) => a.path === path).slice(-1)[0]
+  const latestTotal = analyses.length
+    ? Object.values(
+        analyses.reduce<Record<string, AnalysisRow>>((m, a) => {
+          if (!m[a.path] || a.at >= m[a.path].at) m[a.path] = a
+          return m
+        }, {})
+      ).reduce((n, a) => n + (a.summary?.total ?? 0), 0)
+    : 0
+  const [regionDoc, setRegionDoc] = useState<import('@/lib/dwg-analyze').AnalysisDoc | null>(null)
+  const regionId = latestOf(cmpFile?.path)?.id
+  useEffect(() => {
+    setRegionDoc(null)
+    if (!regionId || !branch) return
+    let live = true
+    api.analysisDoc(branch.id, regionId).then((d) => live && setRegionDoc(d)).catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [regionId, branch?.id])
+
+  const overlays: Overlay[] = useMemo(
     () =>
-      snapshots
-        .filter((s) => s.bounds && (!s.drawing || !cmpFile || s.drawing === fileName(cmpFile.path)))
-        .map((s) => ({ id: s.id, label: s.caption || 'Zona marcada', bounds: s.bounds as Bounds })),
-    [snapshots, cmpFile]
+      (regionDoc?.changes.regions ?? []).map((r, i) => ({
+        bounds: r.bounds,
+        kind: ((r.added > 0 ? 1 : 0) + (r.removed > 0 ? 1 : 0) + (r.modified > 0 ? 1 : 0) > 1
+          ? 'mixed'
+          : r.added > 0
+            ? 'added'
+            : r.removed > 0
+              ? 'removed'
+              : 'modified') as Overlay['kind'],
+        label: `${i + 1}`
+      })),
+    [regionDoc]
   )
+  const [focusBounds, setFocusBounds] = useState<{ b: Bounds; label: string } | null>(null)
+
+  const areas: FocusArea[] = useMemo(
+    () => [
+      ...(regionDoc?.changes.regions ?? []).map((r, i) => ({
+        id: `det-${i}`,
+        label: `Zona ${i + 1} · +${r.added} −${r.removed} ~${r.modified}`,
+        bounds: r.bounds as Bounds
+      })),
+      ...snapshots
+        .filter((s) => s.bounds && (!s.drawing || !cmpFile || s.drawing === fileName(cmpFile.path)))
+        .map((s) => ({ id: s.id, label: s.caption || 'Zona marcada', bounds: s.bounds as Bounds }))
+    ],
+    [snapshots, cmpFile, regionDoc]
+  )
+
+  // Lee las propiedades de las dos versiones (base y última) y registra qué cambió.
+  const runAnalysis = async (path: string, headCommit?: string) => {
+    if (!branch) return
+    const drawingId = drawingIds[path]
+    if (!drawingId) {
+      toast.error('Ese plano no está indexado todavía: sincroniza el proyecto')
+      return
+    }
+    const size = (branch.files ?? []).find((f) => f.path === path)?.sizeBytes ?? 0
+    if (size > 120 * 1024 * 1024) {
+      toast.warning('El plano es muy grande para analizarlo en la ventana', {
+        description: 'Se omite el análisis automático; abre los dos planos en AutoCAD para comparar.'
+      })
+      return
+    }
+    setRunning({ path, msg: 'preparando…' })
+    try {
+      const doc = await analyzeVersions({
+        headUrl: api.fileUrl(drawingId, branch.name),
+        baseUrl: branch.baseCommit ? api.fileUrl(drawingId, branch.baseCommit) : undefined,
+        path,
+        commit: headCommit ?? branch.headCommit,
+        baseRef: branch.baseCommit,
+        onProgress: (msg) => setRunning({ path, msg })
+      })
+      setRunning({ path, msg: 'guardando…' })
+      const res = await api.addAnalysis(branch.id, doc)
+      applyState(res.state)
+      toast.success(
+        doc.summary.total === 0
+          ? 'Sin diferencias detectadas'
+          : `${doc.summary.total} cambio(s) detectados`,
+        {
+          description: doc.summary.total
+            ? `+${doc.summary.added} −${doc.summary.removed} ~${doc.summary.modified} · ${doc.summary.regions} zona(s)`
+            : 'La versión subida es igual a la base.'
+        }
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'no pude analizar el plano')
+    } finally {
+      setRunning(null)
+    }
+  }
 
 
   if (loading) {
@@ -358,6 +456,9 @@ export function TaskPage() {
             <TabsList>
               <TabsTrigger value="files">Archivos · {files.length}</TabsTrigger>
               <TabsTrigger value="preview">Vista previa</TabsTrigger>
+              <TabsTrigger value="changes">
+                <ScanSearch /> Cambios{analyses.length ? ` · ${latestTotal}` : ''}
+              </TabsTrigger>
               <TabsTrigger value="compare">
                 <Columns2 /> Comparar
               </TabsTrigger>
@@ -455,6 +556,23 @@ export function TaskPage() {
               </p>
             </TabsContent>
 
+            <TabsContent value="changes" className="mt-3">
+              <ChangesPanel
+                branchId={branch.id}
+                analyses={analyses}
+                filePaths={(changedFiles.length ? changedFiles : files).map((f) => f.path)}
+                selectedPath={cmpFile?.path ?? ''}
+                onSelectPath={setCompareFile}
+                running={running}
+                canRun={!isDone && !!cmpFile}
+                onRun={(path) => void runAnalysis(path)}
+                onFocus={(b, label) => {
+                  setFocusBounds({ b, label: label ?? 'Zona' })
+                  setTab('compare')
+                }}
+              />
+            </TabsContent>
+
             <TabsContent value="compare" className="mt-3">
               {tab === 'compare' &&
                 (cmpFile && cmpId ? (
@@ -481,6 +599,8 @@ export function TaskPage() {
                       initialRight={branch.name}
                       areas={areas}
                       selectedArea={focusArea}
+                      overlays={overlays}
+                      extraFocus={focusBounds?.b}
                     />
                     <p className="text-muted-foreground text-[11px]">
                       Los dos planos se mueven juntos. Elige qué versión ves de cada lado; con
@@ -612,8 +732,11 @@ export function TaskPage() {
         onDone={(s) => {
           if (s) applyState(s)
           else void loadReview()
-          setTab('compare')
+          setTab('changes')
           void loadSnapshots()
+          // El análisis corre en segundo plano: la subida ya terminó.
+          const path = s?.branch.files?.find((f) => f.changed)?.path ?? s?.branch.files?.[0]?.path ?? cmpFile?.path
+          if (path) void runAnalysis(path, s?.branch.headCommit)
         }}
       />
 

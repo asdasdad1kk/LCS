@@ -188,3 +188,79 @@ func TestTasksTimelineAndSnapshotBounds(t *testing.T) {
 		t.Fatalf("bounds perdidos: %+v", list)
 	}
 }
+
+func TestAnalysisStoredWithTask(t *testing.T) {
+	root := t.TempDir()
+	a := newMachine(t, filepath.Join(root, "nas"), filepath.Join(root, "dataA"), "ana@empresa.com")
+	b2 := newMachine(t, filepath.Join(root, "nas"), filepath.Join(root, "dataB"), "beto@empresa.com")
+
+	p, _ := a.CreateProject(CreateProjectInput{Name: "Planta"})
+	if _, err := a.SetApprovers(p.ID, []vcs.Approver{{Email: "beto@empresa.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Import(p.ID, []IncomingFile{{Name: "a.dwg", Content: dwg("v1")}}, "t"); err != nil {
+		t.Fatal(err)
+	}
+	br, err := a.CreateBranch(CreateBranchInput{ProjectID: p.ID, Drawings: []string{"drawings/a.dwg"}, Title: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Upload(br.ID, IncomingFile{Name: "a.dwg", Content: dwg("v2")}, "m", "ana"); err != nil {
+		t.Fatal(err)
+	}
+	treeBefore, _ := a.Repo(p.ID).DrawingsTreeHash(br.Name)
+
+	doc := []byte(`{"v":1,"path":"drawings/a.dwg","commit":"abc123","summary":{"added":2,"removed":1,"modified":3,"total":6,"texts":1,"layers":["MUROS","TEXTO"]},"changes":{"regions":[]}}`)
+	an, err := a.AddAnalysis(br.ID, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.AddAnalysis(br.ID, []byte(`no es json`)); err == nil {
+		t.Fatal("un análisis ilegible debería rechazarse")
+	}
+	if after, _ := a.Repo(p.ID).DrawingsTreeHash(br.Name); after != treeBefore {
+		t.Fatal("el análisis no debe cambiar drawings/ (invalidaría las aprobaciones)")
+	}
+
+	// Resumen en el estado de la tarea, la línea de tiempo y la tabla.
+	st, _ := a.TaskState(br.ID)
+	if len(st.Analyses) != 1 || st.Analyses[0].ID != an.ID {
+		t.Fatalf("estado de la tarea: %+v", st.Analyses)
+	}
+	found := false
+	for _, it := range st.Review.Timeline {
+		if it.Kind == "changes" && it.Message != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("la línea de tiempo no registra los cambios detectados")
+	}
+	rows, _ := a.TasksTimeline(nil, "all")
+	if rows[0].Changes == nil || rows[0].Changes.Total != 6 || rows[0].Changes.Added != 2 {
+		t.Fatalf("resumen en la tabla: %+v", rows[0].Changes)
+	}
+
+	// Otra máquina lo ve y puede abrir el análisis completo.
+	b2.Discover(false)
+	if err := b2.Sync(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	bb, _ := b2.Store().GetBranchByName(br.Name)
+	if bb == nil {
+		t.Fatal("la otra máquina no ve la tarea")
+	}
+	st2, err := b2.FreshTaskState(bb.ID)
+	if err != nil || len(st2.Analyses) != 1 {
+		t.Fatalf("la otra máquina no ve el análisis: %+v %v", st2, err)
+	}
+	rd, size, err := b2.AnalysisDoc(bb.ID, an.ID)
+	if err != nil || size != int64(len(doc)) {
+		t.Fatalf("documento completo: size=%d err=%v", size, err)
+	}
+	rd.Close()
+	panel, _ := b2.ApprovalsPanel()
+	if len(panel.Pending) != 1 || panel.Pending[0].Changes == nil || panel.Pending[0].Changes.Total != 6 {
+		t.Fatalf("el panel de aprobaciones no muestra los cambios: %+v", panel.Pending)
+	}
+}

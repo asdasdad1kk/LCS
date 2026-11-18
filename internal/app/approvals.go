@@ -97,6 +97,7 @@ func (s *Service) refreshReview(repo *vcs.Repo, b *store.Branch) error {
 	if b.Status == "open" || b.Status == "review" {
 		s.refreshBranchFiles(repo, b)
 	}
+	s.refreshAnalyses(repo, b)
 	return nil
 }
 
@@ -393,7 +394,7 @@ func (s *Service) reviewState(b *store.Branch) ReviewState {
 }
 
 type TimelineItem struct {
-	Kind    string `json:"kind"` // opened | upload | approved | rejected | merged | closed
+	Kind    string `json:"kind"` // opened | upload | changes | approved | rejected | merged | closed
 	At      int64  `json:"at"`
 	Actor   string `json:"actor"`
 	Email   string `json:"email"`
@@ -472,6 +473,19 @@ func (s *Service) timeline(b *store.Branch, st ReviewState) []TimelineItem {
 				Kind: "upload", At: r.CreatedAt, Actor: r.Author, Message: msg,
 				Commit: r.CommitSHA, Size: r.Size, Node: -1,
 			})
+		}
+	}
+	if list, err := s.st.ListAnalyses(b.ID); err == nil {
+		for _, a := range list {
+			var sum struct {
+				Total int `json:"total"`
+			}
+			_ = json.Unmarshal(a.Summary, &sum)
+			msg := fmt.Sprintf("%d cambio(s) detectados en %s", sum.Total, displayName(a.Path))
+			if sum.Total == 0 {
+				msg = "Sin diferencias detectadas en " + displayName(a.Path)
+			}
+			items = append(items, TimelineItem{Kind: "changes", At: a.At, Actor: a.Author, Message: msg, Commit: a.Commit, Node: -1})
 		}
 	}
 	position := map[string]store.Approver{}
@@ -806,8 +820,9 @@ func (s *Service) SetApprovers(projectID string, in []vcs.Approver) (*ApproversV
 // ---------------------------------------------------------------- panel
 
 type PanelItem struct {
-	Branch store.BranchRow `json:"branch"`
-	Files  int             `json:"files"`
+	Changes *Changes        `json:"changes,omitempty"`
+	Branch  store.BranchRow `json:"branch"`
+	Files   int             `json:"files"`
 	// Changed: los planos nuevos de esta versión, para abrirlos y compararlos.
 	Changed []ChangedFile `json:"changed"`
 	Nodes   []Node        `json:"nodes"`
@@ -850,7 +865,7 @@ func (s *Service) ApprovalsPanel() (*Panel, error) {
 				changed++
 			}
 		}
-		item := PanelItem{Branch: row, Files: changed, Changed: s.changedFiles(&b), Nodes: st.Nodes, MyIndex: idx, Next: st.Next}
+		item := PanelItem{Changes: s.changesOf(&b), Branch: row, Files: changed, Changed: s.changedFiles(&b), Nodes: st.Nodes, MyIndex: idx, Next: st.Next}
 		switch {
 		case st.Next == idx:
 			panel.Pending = append(panel.Pending, item)

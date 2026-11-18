@@ -9,6 +9,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { ChainDots } from '@/components/approval-chain'
 import { EventTrack, StageTrack } from '@/components/task-track'
 import { initials, timeAgo } from '@/lib/format'
+import { ChangesChip } from '@/components/changes-chip'
 import { cn } from '@/lib/utils'
 
 type View = 'graph' | 'table'
@@ -249,7 +250,10 @@ function TaskTable({ rows, showProject }: { rows: TaskRow[]; showProject: boolea
                   </td>
                 )}
                 <td className="px-3 py-3">
-                  <StatusBadge status={b.status} />
+                  <div className="flex flex-col items-start gap-1">
+                    <StatusBadge status={b.status} />
+                    <ChangesChip changes={r.changes} />
+                  </div>
                 </td>
                 <td className="px-3 py-3">
                   <StageTrack stage={r.stage} />

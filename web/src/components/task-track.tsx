@@ -1,4 +1,4 @@
-import { Check, GitMerge, PencilLine, ShieldCheck, Upload, X } from 'lucide-react'
+import { Check, GitMerge, PencilLine, ScanSearch, ShieldCheck, Upload, X } from 'lucide-react'
 import type { TaskStage, TimelineItem } from '@/lib/api'
 import { formatDate, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -58,6 +58,7 @@ export function StageTrack({ stage }: { stage: TaskStage }) {
 const KIND: Record<string, { icon: typeof Check; tone: string; verb: string }> = {
   opened: { icon: PencilLine, tone: 'bg-primary text-primary-foreground', verb: 'Abrió la tarea' },
   upload: { icon: Upload, tone: 'bg-sky-500 text-white', verb: 'Subió una versión' },
+  changes: { icon: ScanSearch, tone: 'bg-violet-500 text-white', verb: 'Cambios detectados' },
   approved: { icon: ShieldCheck, tone: 'bg-success text-white', verb: 'Aprobó' },
   rejected: { icon: X, tone: 'bg-destructive text-white', verb: 'Rechazó' },
   merged: { icon: GitMerge, tone: 'bg-success text-white', verb: 'Integrada en main' },

@@ -212,6 +212,17 @@ CREATE INDEX IF NOT EXISTS idx_drawings_project ON drawings(project_id);
 CREATE INDEX IF NOT EXISTS idx_branches_project ON branches(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_revisions_drawing ON revisions(project_id, drawing_path);
 CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS analyses (
+	id         TEXT NOT NULL,
+	branch_id  TEXT NOT NULL,
+	path       TEXT NOT NULL,
+	commit_sha TEXT NOT NULL,
+	author     TEXT NOT NULL DEFAULT '',
+	at         INTEGER NOT NULL,
+	summary    TEXT NOT NULL,
+	PRIMARY KEY (branch_id, id)
+);
 `
 
 func Open(path string) (*Store, error) {
@@ -711,6 +722,7 @@ func (s *Store) DeleteProject(id string) error {
 	stmts := []string{
 		`DELETE FROM approvals WHERE branch_id IN (SELECT id FROM branches WHERE project_id=?)`,
 		`DELETE FROM branch_files WHERE branch_id IN (SELECT id FROM branches WHERE project_id=?)`,
+		`DELETE FROM analyses WHERE branch_id IN (SELECT id FROM branches WHERE project_id=?)`,
 		`DELETE FROM branches WHERE project_id=?`,
 		`DELETE FROM revisions WHERE project_id=?`,
 		`DELETE FROM drawings WHERE project_id=?`,
@@ -754,6 +766,62 @@ func (s *Store) ListEventsFor(ids []string, limit int) ([]Event, error) {
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// Analysis es el resumen de lo que cambió en un plano de una tarea (el análisis
+// completo vive en git, en .lcs/analysis/<id>.json).
+type Analysis struct {
+	ID       string `json:"id"`
+	BranchID string `json:"branchId"`
+	Path     string `json:"path"`
+	Commit   string `json:"commit"`
+	Author   string `json:"author"`
+	At       int64  `json:"at"`
+	// Summary es el JSON de resumen tal como lo calculó el visor.
+	Summary json.RawMessage `json:"summary"`
+}
+
+func (s *Store) ReplaceAnalyses(branchID string, list []Analysis) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM analyses WHERE branch_id=?`, branchID); err != nil {
+		return err
+	}
+	for _, a := range list {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO analyses(id,branch_id,path,commit_sha,author,at,summary) VALUES(?,?,?,?,?,?,?)`,
+			a.ID, branchID, a.Path, a.Commit, a.Author, a.At, string(a.Summary)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) AddAnalysis(a Analysis) error {
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO analyses(id,branch_id,path,commit_sha,author,at,summary) VALUES(?,?,?,?,?,?,?)`,
+		a.ID, a.BranchID, a.Path, a.Commit, a.Author, a.At, string(a.Summary))
+	return err
+}
+
+func (s *Store) ListAnalyses(branchID string) ([]Analysis, error) {
+	rows, err := s.db.Query(`SELECT id,branch_id,path,commit_sha,author,at,summary FROM analyses WHERE branch_id=? ORDER BY at ASC`, branchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Analysis{}
+	for rows.Next() {
+		var a Analysis
+		var sum string
+		if err := rows.Scan(&a.ID, &a.BranchID, &a.Path, &a.Commit, &a.Author, &a.At, &sum); err != nil {
+			return nil, err
+		}
+		a.Summary = json.RawMessage(sum)
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

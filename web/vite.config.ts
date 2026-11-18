@@ -8,6 +8,8 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') }
   },
+  // El worker de análisis de DWG usa el WASM de LibreDWG (módulo ES).
+  worker: { format: 'es' },
   build: {
     outDir: '../internal/webui/dist',
     emptyOutDir: true,

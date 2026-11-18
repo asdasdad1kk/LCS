@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeftRight, Link2, Link2Off, Loader2, Target } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { unionBounds, type Bounds } from '@/components/cad-viewer'
+import { unionBounds, type Bounds, type Overlay } from '@/components/cad-viewer'
 
 export type RefOption = { ref: string; label: string }
 
@@ -77,7 +77,9 @@ export function CompareView({
   initialLeft,
   initialRight,
   areas,
-  selectedArea
+  selectedArea,
+  overlays,
+  extraFocus
 }: {
   drawingId: string
   fileName: string
@@ -87,6 +89,10 @@ export function CompareView({
   areas: FocusArea[]
   /** Zona a enfocar al abrir (p. ej. al llegar desde un recorte). */
   selectedArea?: string | null
+  /** Recuadros de los cambios detectados, dibujados sobre los dos planos. */
+  overlays?: Overlay[]
+  /** Una zona puntual a encuadrar al abrir (viene de la pestaña Cambios). */
+  extraFocus?: Bounds | null
 }) {
   const [left, setLeft] = useState(initialLeft)
   const [right, setRight] = useState(initialRight)
@@ -94,6 +100,13 @@ export function CompareView({
   const leftFrame = useRef<HTMLIFrameElement>(null)
   const rightFrame = useRef<HTMLIFrameElement>(null)
   const readyCount = useRef(0)
+  const overlaysRef = useRef<Overlay[] | undefined>(overlays)
+  useEffect(() => {
+    overlaysRef.current = overlays
+    post(leftFrame.current, { lcs: 'regions', list: overlays ?? [] })
+    post(rightFrame.current, { lcs: 'regions', list: overlays ?? [] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlays])
   const wanted = useRef<Bounds | null>(null)
 
   const post = (frame: HTMLIFrameElement | null, msg: object) =>
@@ -112,6 +125,7 @@ export function CompareView({
       if (e.origin !== window.location.origin || !e.data || typeof e.data !== 'object') return
       const from = e.source
       if (e.data.lcs === 'ready') {
+        if (overlaysRef.current?.length) post(from === leftFrame.current?.contentWindow ? leftFrame.current : rightFrame.current, { lcs: 'regions', list: overlaysRef.current })
         if (wanted.current) post(from === leftFrame.current?.contentWindow ? leftFrame.current : rightFrame.current, { lcs: 'focus', b: wanted.current })
         return
       }
@@ -123,6 +137,12 @@ export function CompareView({
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [sync])
+
+  const extraKey = extraFocus ? [extraFocus.minX, extraFocus.minY, extraFocus.maxX, extraFocus.maxY].join(',') : ''
+  useEffect(() => {
+    if (extraFocus) focusOn(extraFocus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extraKey])
 
   // Zona pedida desde fuera (recorte elegido en la galería).
   useEffect(() => {

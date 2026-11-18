@@ -1,3 +1,4 @@
+import type { AnalysisDoc, AnalysisSummary } from '@/lib/dwg-analyze'
 export type Project = {
   id: string
   name: string
@@ -115,7 +116,7 @@ export type ReviewNode = {
   decision?: Decision
 }
 
-export type TimelineKind = 'opened' | 'upload' | 'approved' | 'rejected' | 'merged' | 'closed'
+export type TimelineKind = 'opened' | 'upload' | 'changes' | 'approved' | 'rejected' | 'merged' | 'closed'
 
 export type TimelineItem = {
   kind: TimelineKind
@@ -159,7 +160,20 @@ export type ChangedFile = { path: string; name: string; drawingId: string; size:
 
 export type TaskStage = 'open' | 'review' | 'approving' | 'ready' | 'merged' | 'closed'
 
+/** Lo que cambió en la tarea, sumado sobre el último análisis de cada plano. */
+export type Changes = {
+  added: number
+  removed: number
+  modified: number
+  total: number
+  texts: number
+  layers: string[]
+  files: number
+  at: number
+}
+
 export type TaskRow = {
+  changes?: Changes
   branch: Branch & { projectName: string }
   nodes: ReviewNode[]
   files: ChangedFile[]
@@ -168,6 +182,7 @@ export type TaskRow = {
 }
 
 export type PanelItem = {
+  changes?: Changes
   branch: Branch & { projectName: string }
   files: number
   changed: ChangedFile[]
@@ -339,6 +354,12 @@ export const api = {
     }),
   closeBranch: (id: string) =>
     req<{ ok: boolean; state?: TaskState }>(`/api/branches/${id}/close`, { method: 'POST' }),
+  addAnalysis: (id: string, doc: AnalysisDoc) =>
+    req<{ analysis: AnalysisRow; state: TaskState }>(`/api/branches/${id}/analysis`, {
+      method: 'POST',
+      body: JSON.stringify(doc)
+    }),
+  analysisDoc: (id: string, analysisId: string) => req<AnalysisDoc>(`/api/branches/${id}/analysis/${analysisId}`),
   snapshots: (id: string) => req<Snapshot[]>(`/api/branches/${id}/snapshots`),
   addSnapshot: (
     id: string,
@@ -444,4 +465,15 @@ export type Snapshot = {
 }
 
 /** Todo lo que la pantalla de una tarea necesita; las acciones lo devuelven al terminar. */
-export type TaskState = { branch: Branch; review: ReviewView }
+export type TaskState = { branch: Branch; review: ReviewView; analyses: AnalysisRow[] }
+
+/** Resumen de un análisis de cambios; el documento completo se pide aparte. */
+export type AnalysisRow = {
+  id: string
+  branchId: string
+  path: string
+  commit: string
+  author: string
+  at: number
+  summary: AnalysisSummary
+}

@@ -1,4 +1,4 @@
-import { Check, GitBranch, GitMerge, Trash2, Upload, X, type LucideIcon } from 'lucide-react'
+import { Check, GitBranch, GitMerge, ScanSearch, Trash2, Upload, X, type LucideIcon } from 'lucide-react'
 import type { TimelineItem, TimelineKind } from '@/lib/api'
 import { formatBytes, formatDate, shortSha, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -13,6 +13,11 @@ const style: Record<TimelineKind, { icon: LucideIcon; dot: string; title: (t: Ti
     icon: Upload,
     dot: 'bg-primary/15 text-primary',
     title: (t) => `${who(t)} subió una versión`
+  },
+  changes: {
+    icon: ScanSearch,
+    dot: 'bg-violet-500 text-white',
+    title: (t) => `${who(t)} · cambios detectados`
   },
   approved: {
     icon: Check,

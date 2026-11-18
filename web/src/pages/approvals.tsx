@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/separator'
 import { PageHeader, EmptyState, SectionTitle } from '@/components/page-header'
 import { ChainDots, nameOf } from '@/components/approval-chain'
 import { initials, timeAgo } from '@/lib/format'
+import { ChangesChip } from '@/components/changes-chip'
 
 export function ApprovalsPage() {
   const [panel, setPanel] = useState<ApprovalsPanel | null>(null)
@@ -181,7 +182,8 @@ function Row({ item, tone }: { item: PanelItem; tone: 'pending' | 'queued' | 'de
           <span>{timeAgo(b.updatedAt)}</span>
         </div>
         {item.changed?.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+            <ChangesChip changes={item.changes} />
             {item.changed.map((f) => (
               <Link
                 key={f.path}

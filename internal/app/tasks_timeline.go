@@ -33,6 +33,7 @@ func (s *Service) changedFiles(b *store.Branch) []ChangedFile {
 // TaskRow es una tarea con su estado y su línea de tiempo, para la tabla de
 // seguimiento: cualquiera ve en qué paso va cada tarea de cualquier proyecto.
 type TaskRow struct {
+	Changes  *Changes        `json:"changes,omitempty"`
 	Branch   store.BranchRow `json:"branch"`
 	Nodes    []Node          `json:"nodes"`
 	Files    []ChangedFile   `json:"files"`
@@ -81,7 +82,7 @@ func (s *Service) TasksTimeline(ids []string, status string) ([]TaskRow, error) 
 		st := s.reviewState(&b)
 		out = append(out, TaskRow{
 			Branch: row, Nodes: st.Nodes, Files: s.changedFiles(&b),
-			Timeline: s.timeline(&b, st), Stage: stageOf(&b, st),
+			Timeline: s.timeline(&b, st), Changes: s.changesOf(&b), Stage: stageOf(&b, st),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Branch.UpdatedAt > out[j].Branch.UpdatedAt })
