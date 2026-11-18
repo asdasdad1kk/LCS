@@ -333,12 +333,12 @@ export const api = {
 
   branch: (id: string) => req<Branch>(`/api/branches/${id}`),
   mergeBranch: (id: string, strategy?: string) =>
-    req<{ commit: string; paths: string[] }>(`/api/branches/${id}/merge`, {
+    req<{ commit: string; paths: string[]; state?: TaskState }>(`/api/branches/${id}/merge`, {
       method: 'POST',
       body: JSON.stringify({ strategy })
     }),
   closeBranch: (id: string) =>
-    req<{ ok: boolean }>(`/api/branches/${id}/close`, { method: 'POST' }),
+    req<{ ok: boolean; state?: TaskState }>(`/api/branches/${id}/close`, { method: 'POST' }),
   snapshots: (id: string) => req<Snapshot[]>(`/api/branches/${id}/snapshots`),
   addSnapshot: (
     id: string,
@@ -362,13 +362,15 @@ export const api = {
   /** Quién tiene cada plano en edición (consulta la carpeta compartida). */
   editing: (projectId: string) => req<Record<string, Editor[]>>(`/api/projects/${projectId}/editing`),
   review: (branchId: string) => req<ReviewView>(`/api/branches/${branchId}/review`),
+  /** La tarea y su revisión en una sola consulta. */
+  taskState: (branchId: string) => req<TaskState>(`/api/branches/${branchId}/state`),
   approve: (branchId: string, comment?: string) =>
-    req<ReviewView>(`/api/branches/${branchId}/approve`, {
+    req<TaskState>(`/api/branches/${branchId}/approve`, {
       method: 'POST',
       body: JSON.stringify({ comment })
     }),
   reject: (branchId: string, comment: string) =>
-    req<ReviewView>(`/api/branches/${branchId}/reject`, {
+    req<TaskState>(`/api/branches/${branchId}/reject`, {
       method: 'POST',
       body: JSON.stringify({ comment })
     }),
@@ -424,7 +426,7 @@ export function uploadToBranch(
   const form = new FormData()
   form.append('file', file, file.name)
   form.append('message', message)
-  return uploadWithProgress<Branch>(`/api/branches/${branchId}/upload`, form, onProgress)
+  return uploadWithProgress<Branch & { state?: TaskState }>(`/api/branches/${branchId}/upload`, form, onProgress)
 }
 
 /** Recorte de la zona de un layout que se va a cambiar, guardado con la tarea. */
@@ -440,3 +442,6 @@ export type Snapshot = {
   at: number
   size: number
 }
+
+/** Todo lo que la pantalla de una tarea necesita; las acciones lo devuelven al terminar. */
+export type TaskState = { branch: Branch; review: ReviewView }

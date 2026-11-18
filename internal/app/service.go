@@ -43,9 +43,10 @@ type Service struct {
 	indexedMain map[string]string
 
 	// Qué versión del repositorio compartido ya se procesó (ver RefreshReviews).
-	seenMu  sync.Mutex
-	seen    map[string]seenState
-	flights sync.Map // proyecto → *sync.Mutex
+	seenMu   sync.Mutex
+	seen     map[string]seenState
+	flights  sync.Map // proyecto → *sync.Mutex
+	cleaning sync.Map // proyectos cuya carpeta se está borrando
 
 	// Firma de refs de la última reconciliación completa por proyecto.
 	reconMu      sync.Mutex
@@ -202,12 +203,25 @@ func (s *Service) Sync(projectID string) error {
 }
 
 func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
+	return s.reconcile(projectID, repo, true)
+}
+
+// reindexLocal reindexa desde el clon local, sin ir al NAS. Se usa justo después
+// de nuestra propia escritura: ya se leyó lo necesario antes de escribir, y
+// repetir la sincronización completa costaba decenas de viajes de red.
+func (s *Service) reindexLocal(projectID string, repo *vcs.Repo) error {
+	return s.reconcile(projectID, repo, false)
+}
+
+func (s *Service) reconcile(projectID string, repo *vcs.Repo, network bool) error {
 	// Un proyecto descubierto en la carpeta compartida todavía no tiene clon.
 	if err := vcs.EnsureClone(repo.Bare, repo.Local); err != nil {
 		return err
 	}
-	if err := repo.Pull(vcs.MainBranch); err != nil {
-		return err
+	if network {
+		if err := repo.Pull(vcs.MainBranch); err != nil {
+			return err
+		}
 	}
 	// Mismas ramas en los mismos commits que en la última reconciliación: el
 	// índice ya está al día (releer todos los planos y el historial cuesta
@@ -286,8 +300,10 @@ func (s *Service) reconcileLocked(projectID string, repo *vcs.Repo) error {
 	}
 
 	// Work branches.
-	if err := repo.SyncBranches(); err != nil {
-		return err
+	if network {
+		if err := repo.SyncBranches(); err != nil {
+			return err
+		}
 	}
 	metas, err := repo.ListWorkBranches()
 	if err != nil {
@@ -410,9 +426,6 @@ func (s *Service) Import(projectID string, files []IncomingFile, actor string) (
 	repo := s.repo(projectID)
 	var blobs map[string]string
 	err := repo.WithLock(func() error {
-		if err := repo.Pull(vcs.MainBranch); err != nil {
-			return err
-		}
 		payload := map[string][]byte{}
 		for _, f := range files {
 			if !strings.EqualFold(filepath.Ext(f.Name), ".dwg") {
@@ -435,7 +448,7 @@ func (s *Service) Import(projectID string, files []IncomingFile, actor string) (
 		if err != nil {
 			return err
 		}
-		return s.reconcileLocked(projectID, repo)
+		return s.reindexLocal(projectID, repo)
 	})
 	if err != nil {
 		return nil, err
@@ -554,7 +567,7 @@ func (s *Service) CreateBranch(in CreateBranchInput) (*store.Branch, error) {
 
 	var out *store.Branch
 	err = repo.WithLock(func() error {
-		if err := repo.Pull(vcs.MainBranch); err != nil {
+		if err := repo.SyncSome(vcs.MainBranch); err != nil {
 			return err
 		}
 		base, err := repo.HeadOf(vcs.MainBranch)
@@ -750,7 +763,7 @@ func (s *Service) Merge(branchID, strategy, actor string) (*vcs.MergeResult, err
 		// Compuerta de aprobaciones. Se decide con lo último de la carpeta
 		// compartida, no con la copia local: otro equipo pudo aprobar, rechazar
 		// o subir un plano nuevo hace un minuto.
-		if err := repo.SyncBranches(); err != nil {
+		if err := repo.SyncSome(b.Name, vcs.MainBranch); err != nil {
 			return err
 		}
 		_ = s.refreshProjectFile(b.ProjectID, repo)
@@ -772,7 +785,7 @@ func (s *Service) Merge(branchID, strategy, actor string) (*vcs.MergeResult, err
 		if err != nil {
 			return err
 		}
-		return s.reconcileLocked(b.ProjectID, repo)
+		return s.reindexLocal(b.ProjectID, repo)
 	})
 	if err != nil {
 		return nil, err
@@ -820,7 +833,7 @@ func (s *Service) RestoreDrawing(drawingID, commit, actor string) (*store.Drawin
 			return err
 		}
 		newCommit = sha
-		return s.reconcileLocked(d.ProjectID, repo)
+		return s.reindexLocal(d.ProjectID, repo)
 	})
 	if err != nil {
 		return nil, err

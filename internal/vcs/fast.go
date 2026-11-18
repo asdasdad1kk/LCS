@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +37,7 @@ import (
 type side struct {
 	repo *git.Repository
 	dir  string // directorio .git (clon) o el repositorio bare
+	fs   nasFS  // cómo se toca el disco de ese lado (el NAS se cuenta y se simula)
 }
 
 func (s side) has(h plumbing.Hash) bool {
@@ -51,18 +51,24 @@ func loosePath(gitDir string, h plumbing.Hash) string {
 
 func localGitDir(local string) string { return filepath.Join(local, ".git") }
 
-// writeLoose guarda un objeto como archivo suelto. Es idempotente y atómico
-// (archivo temporal + rename), así que otro equipo nunca lee uno a medias.
-func writeLoose(gitDir string, h plumbing.Hash, typ plumbing.ObjectType, size int64, src io.Reader) error {
+// writeLoose guarda un objeto como archivo suelto. Es atómico (archivo
+// temporal + rename), así que otro equipo nunca lee uno a medias. Con blind no
+// pregunta si ya existe: en el NAS cada pregunta es un viaje de red, y escribir
+// dos veces el mismo objeto es inofensivo.
+func writeLoose(fsys nasFS, gitDir string, h plumbing.Hash, typ plumbing.ObjectType, size int64, src io.Reader, blind bool) error {
 	dst := loosePath(gitDir, h)
-	if _, err := os.Stat(dst); err == nil {
-		return nil
+	if !blind {
+		if _, err := fsys.Stat(dst); err == nil {
+			return nil
+		}
 	}
 	dir := filepath.Dir(dst)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+	tmp, err := fsys.CreateTemp(dir, "tmp_obj_")
+	if errors.Is(err, os.ErrNotExist) {
+		if err = fsys.MkdirAll(dir, 0o755); err == nil {
+			tmp, err = fsys.CreateTemp(dir, "tmp_obj_")
+		}
 	}
-	tmp, err := os.CreateTemp(dir, "tmp_obj_")
 	if err != nil {
 		return err
 	}
@@ -71,7 +77,7 @@ func writeLoose(gitDir string, h plumbing.Hash, typ plumbing.ObjectType, size in
 	defer func() {
 		if !done {
 			tmp.Close()
-			os.Remove(name)
+			_ = fsys.Remove(name)
 		}
 	}()
 	bw := bufio.NewWriterSize(tmp, 1<<20)
@@ -94,9 +100,9 @@ func writeLoose(gitDir string, h plumbing.Hash, typ plumbing.ObjectType, size in
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, dst); err != nil {
-		if _, serr := os.Stat(dst); serr == nil { // otro equipo lo escribió primero
-			os.Remove(name)
+	if err := renameRetry(fsys, name, dst); err != nil {
+		if _, serr := fsys.Stat(dst); serr == nil { // otro equipo lo escribió primero
+			_ = fsys.Remove(name)
 			done = true
 			return nil
 		}
@@ -106,10 +112,26 @@ func writeLoose(gitDir string, h plumbing.Hash, typ plumbing.ObjectType, size in
 	return nil
 }
 
+func renameRetry(fsys nasFS, from, to string) error {
+	var err error
+	for i := 0; i < 3; i++ {
+		if err = fsys.Rename(from, to); err == nil {
+			return nil
+		}
+		if _, serr := fsys.Stat(to); serr == nil {
+			return err // ya existe: quien llama decide
+		}
+		time.Sleep(time.Duration(25*(i+1)) * time.Millisecond)
+	}
+	return err
+}
+
 // copyRaw duplica un archivo suelto tal cual (ya viene comprimido).
-func copyRaw(srcPath, dstPath string) error {
-	if _, err := os.Stat(dstPath); err == nil {
-		return nil
+func copyRaw(srcPath string, dstFS nasFS, dstPath string, blind bool) error {
+	if !blind {
+		if _, err := dstFS.Stat(dstPath); err == nil {
+			return nil
+		}
 	}
 	in, err := os.Open(srcPath)
 	if err != nil {
@@ -117,26 +139,28 @@ func copyRaw(srcPath, dstPath string) error {
 	}
 	defer in.Close()
 	dir := filepath.Dir(dstPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+	tmp, err := dstFS.CreateTemp(dir, "tmp_obj_")
+	if errors.Is(err, os.ErrNotExist) {
+		if err = dstFS.MkdirAll(dir, 0o755); err == nil {
+			tmp, err = dstFS.CreateTemp(dir, "tmp_obj_")
+		}
 	}
-	tmp, err := os.CreateTemp(dir, "tmp_obj_")
 	if err != nil {
 		return err
 	}
 	name := tmp.Name()
 	if _, err := io.Copy(tmp, bufio.NewReaderSize(in, 1<<20)); err != nil {
 		tmp.Close()
-		os.Remove(name)
+		_ = dstFS.Remove(name)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(name)
+		_ = dstFS.Remove(name)
 		return err
 	}
-	if err := os.Rename(name, dstPath); err != nil {
-		os.Remove(name)
-		if _, serr := os.Stat(dstPath); serr == nil {
+	if err := renameRetry(dstFS, name, dstPath); err != nil {
+		_ = dstFS.Remove(name)
+		if _, serr := dstFS.Stat(dstPath); serr == nil {
 			return nil
 		}
 		return err
@@ -144,12 +168,19 @@ func copyRaw(srcPath, dstPath string) error {
 	return nil
 }
 
-func copyObject(src, dst side, h plumbing.Hash) error {
-	if dst.has(h) {
+func copyObject(src, dst side, h plumbing.Hash) error { return copyObjectMode(src, dst, h, false) }
+
+func copyObjectMode(src, dst side, h plumbing.Hash, blind bool) error {
+	if !blind && dst.has(h) {
 		return nil
 	}
-	if err := copyRaw(loosePath(src.dir, h), loosePath(dst.dir, h)); err == nil {
-		return nil
+	if src.fs == nil || isOS(src.fs) {
+		if err := copyRaw(loosePath(src.dir, h), dst.fs, loosePath(dst.dir, h), blind); err == nil {
+			return nil
+		}
+	} else if raw, err := src.fs.ReadFile(loosePath(src.dir, h)); err == nil {
+		// Origen en el NAS: el objeto suelto se lee y se guarda tal cual.
+		return writeRawBytes(dst, h, raw, blind)
 	}
 	// Empaquetado en el origen (p. ej. tras un gc): se reescribe suelto.
 	obj, err := src.repo.Storer.EncodedObject(plumbing.AnyObject, h)
@@ -161,7 +192,46 @@ func copyObject(src, dst side, h plumbing.Hash) error {
 		return err
 	}
 	defer rd.Close()
-	return writeLoose(dst.dir, h, obj.Type(), obj.Size(), rd)
+	return writeLoose(dst.fs, dst.dir, h, obj.Type(), obj.Size(), rd, blind)
+}
+
+func isOS(f nasFS) bool { _, ok := f.(osFS); return ok }
+
+func writeRawBytes(dst side, h plumbing.Hash, raw []byte, blind bool) error {
+	path := loosePath(dst.dir, h)
+	if !blind {
+		if _, err := dst.fs.Stat(path); err == nil {
+			return nil
+		}
+	}
+	dir := filepath.Dir(path)
+	tmp, err := dst.fs.CreateTemp(dir, "tmp_obj_")
+	if errors.Is(err, os.ErrNotExist) {
+		if err = dst.fs.MkdirAll(dir, 0o755); err == nil {
+			tmp, err = dst.fs.CreateTemp(dir, "tmp_obj_")
+		}
+	}
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		_ = dst.fs.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = dst.fs.Remove(name)
+		return err
+	}
+	if err := renameRetry(dst.fs, name, path); err != nil {
+		_ = dst.fs.Remove(name)
+		if _, serr := dst.fs.Stat(path); serr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // plan junta, sin copiar nada todavía, los objetos que le faltan a dst.
@@ -251,11 +321,15 @@ func transfer(src, dst side, tip plumbing.Hash) error {
 }
 
 func parallelCopy(src, dst side, hashes []plumbing.Hash) error {
+	return parallelCopyMode(src, dst, hashes, false)
+}
+
+func parallelCopyMode(src, dst side, hashes []plumbing.Hash, blind bool) error {
 	if len(hashes) == 0 {
 		return nil
 	}
 	if len(hashes) == 1 {
-		return copyObject(src, dst, hashes[0])
+		return copyObjectMode(src, dst, hashes[0], blind)
 	}
 	const workers = 8
 	jobs := make(chan plumbing.Hash)
@@ -267,7 +341,7 @@ func parallelCopy(src, dst side, hashes []plumbing.Hash) error {
 		go func() {
 			defer wg.Done()
 			for h := range jobs {
-				if err := copyObject(src, dst, h); err != nil {
+				if err := copyObjectMode(src, dst, h, blind); err != nil {
 					mu.Lock()
 					if first == nil {
 						first = err
@@ -293,162 +367,88 @@ func closeRepo(r *git.Repository) {
 
 // ---------------------------------------------------------------- fetch
 
-var fetchedAt timeMap
-
-// Fetch trae del repositorio compartido las ramas que cambiaron. Si nada se
-// movió no copia nada (solo lee las referencias).
-func (r *Repo) Fetch() error {
-	return r.fetch(0)
-}
-
-// fetchFresh evita repetir el viaje a la red dentro de una misma operación
-// encadenada (integrar → sincronizar → reconciliar).
-func (r *Repo) fetchFresh(maxAge time.Duration) error {
-	return r.fetch(maxAge)
-}
-
-func (r *Repo) fetch(maxAge time.Duration) error {
-	if maxAge > 0 {
-		if t, ok := fetchedAt.get(r.Local); ok && time.Since(t) < maxAge {
-			return nil
-		}
-	}
-	// Sobre un NAS cada archivo leído es un viaje de red: recorrer todas las
-	// referencias cuesta decenas. Cada escritura de LCS cambia un archivo token
-	// en el repositorio compartido; si sigue igual, nada se movió desde la última
-	// vez y alcanza con esta única lectura. Cada minuto se hace igual el
-	// recorrido completo, por si alguien escribió con git a mano.
-	token := readToken(r.Bare)
-	if token == "" {
-		// Repositorio anterior al token: se crea para que desde ahora las
-		// lecturas sin cambios cuesten un solo archivo.
-		bumpToken(r.Bare)
-		token = readToken(r.Bare)
-	}
-	if token != "" {
-		if last, ok := tokens.get(r.Local); ok && last.token == token && time.Since(last.at) < time.Minute {
-			return nil
-		}
-	}
-	if err := r.fetchFull(); err != nil {
-		return err
-	}
-	if token != "" {
-		tokens.set(r.Local, tokenState{token: token, at: time.Now()})
-	}
-	return nil
-}
-
-func (r *Repo) fetchFull() error {
-	defer slow("fetchFull")()
-	bare, err := git.PlainOpen(r.Bare)
-	if err != nil {
-		return err
-	}
-	defer closeRepo(bare)
-	local, err := open(r.Local)
-	if err != nil {
-		return err
-	}
-	defer closeRepo(local)
-
-	remote := map[string]plumbing.Hash{}
-	iter, err := bare.References()
-	if err != nil {
-		return err
-	}
-	_ = iter.ForEach(func(ref *plumbing.Reference) error {
-		if ref.Name().IsBranch() && ref.Type() == plumbing.HashReference {
-			remote[ref.Name().Short()] = ref.Hash()
-		}
-		return nil
-	})
-	iter.Close()
-
-	from := side{repo: bare, dir: r.Bare}
-	to := side{repo: local, dir: localGitDir(r.Local)}
-	for name, h := range remote {
-		tracking := plumbing.NewRemoteReferenceName("origin", name)
-		if cur, err := local.Reference(tracking, false); err == nil && cur.Hash() == h {
-			continue
-		}
-		if err := transfer(from, to, h); err != nil {
-			return err
-		}
-		if err := local.Storer.SetReference(plumbing.NewHashReference(tracking, h)); err != nil {
-			return err
-		}
-	}
-
-	// Una rama descartada en otro equipo desaparece también de aquí.
-	stale := []plumbing.ReferenceName{}
-	if refs, err := local.References(); err == nil {
-		_ = refs.ForEach(func(ref *plumbing.Reference) error {
-			n := ref.Name()
-			if !n.IsRemote() {
-				return nil
-			}
-			short := strings.TrimPrefix(string(n), "refs/remotes/origin/")
-			if short == string(n) || short == "HEAD" || short == "" {
-				return nil
-			}
-			if _, ok := remote[short]; !ok {
-				stale = append(stale, n)
-			}
-			return nil
-		})
-		refs.Close()
-	}
-	for _, n := range stale {
-		_ = local.Storer.RemoveReference(n)
-	}
-	fetchedAt.set(r.Local, time.Now())
-	return nil
-}
-
 // ---------------------------------------------------------------- publish
 
-// publish deja disponible la punta de una rama en la carpeta compartida:
-// primero los objetos, al final la referencia. Solo avanza (fast-forward); si
-// otro equipo movió la rama antes, devuelve git.ErrNonFastForwardUpdate.
+// publish deja disponible la punta de una rama en la carpeta compartida
+// recorriendo el historial para copiar lo que falte (camino lento: se usa solo
+// cuando hay commits locales sin publicar). Solo avanza (fast-forward).
 func (r *Repo) publish(local *git.Repository, branch string, tip plumbing.Hash) error {
-	bare, err := git.PlainOpen(r.Bare)
+	defer slow("publish(recorrido)", "rama", branch)()
+	bare, err := openBare(r.Bare)
 	if err != nil {
 		return err
 	}
 	defer closeRepo(bare)
-	if err := transfer(side{local, localGitDir(r.Local)}, side{bare, r.Bare}, tip); err != nil {
+	if err := transfer(side{local, localGitDir(r.Local), osFS{}}, side{bare, r.Bare, nas}, tip); err != nil {
 		return err
 	}
-	name := branchRef(branch)
-	var old *plumbing.Reference
-	cur, err := bare.Reference(name, true)
-	switch {
-	case errors.Is(err, plumbing.ErrReferenceNotFound):
-	case err != nil:
+	cur, ok, err := bareRef(r.Bare, branch)
+	if err != nil {
 		return err
-	default:
-		if cur.Hash() == tip {
+	}
+	var old plumbing.Hash
+	if ok {
+		if cur == tip {
 			return nil
 		}
-		ok := false
-		if cc, err := local.CommitObject(cur.Hash()); err == nil {
+		okAnc := false
+		if cc, err := local.CommitObject(cur); err == nil {
 			if tc, err := local.CommitObject(tip); err == nil {
-				ok, _ = cc.IsAncestor(tc)
+				okAnc, _ = cc.IsAncestor(tc)
 			}
 		}
-		if !ok {
+		if !okAnc {
 			return git.ErrNonFastForwardUpdate
 		}
 		old = cur
 	}
-	if err := bare.Storer.CheckAndSetReference(plumbing.NewHashReference(name, tip), old); err != nil {
-		return git.ErrNonFastForwardUpdate
+	return r.finishPublish(local, branch, old, tip)
+}
+
+// finishPublish mueve la referencia y avisa a los demás equipos.
+func (r *Repo) finishPublish(local *git.Repository, branch string, old, tip plumbing.Hash) error {
+	if err := casRef(r.Bare, branch, old, tip); err != nil {
+		return err
 	}
-	bumpToken(r.Bare)
 	_ = local.Storer.SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", branch), tip))
-	fetchedAt.set(r.Local, time.Now())
-	tokens.m.Delete(r.Local) // el próximo fetch relee: el token cambió por nuestra propia escritura
+	if st := touchState(r.Bare, func(refs map[string]string) { refs[branch] = tip.String() }); st != nil {
+		seen, _ := seenStates.get(r.Local)
+		seen.rev, seen.at = st.Rev, time.Now()
+		seenStates.set(r.Local, seen)
+	}
+	return nil
+}
+
+// publishFast publica un commit recién armado copiando SOLO los objetos que
+// se crearon para él (en vez de recorrer el historial preguntando al NAS qué
+// falta). Supone que los padres ya están en el repositorio compartido.
+func (r *Repo) publishFast(local *git.Repository, branch string, tip plumbing.Hash, sink *objSink, sent map[plumbing.Hash]bool) error {
+	defer slow("publish", "rama", branch, "objetos", len(sink.blobs)+len(sink.others))()
+	src := side{local, localGitDir(r.Local), osFS{}}
+	dst := side{nil, r.Bare, nas}
+	pending := func(list []plumbing.Hash) []plumbing.Hash {
+		out := make([]plumbing.Hash, 0, len(list))
+		for _, h := range list {
+			if !sent[h] {
+				out = append(out, h)
+			}
+		}
+		return out
+	}
+	blobs, rest := pending(sink.blobs), pending(sink.others)
+	// Blobs primero y en paralelo; árboles y commit al final.
+	if err := parallelCopyMode(src, dst, blobs, true); err != nil {
+		return err
+	}
+	for _, h := range blobs {
+		sent[h] = true
+	}
+	if err := parallelCopyMode(src, dst, rest, true); err != nil {
+		return err
+	}
+	for _, h := range rest {
+		sent[h] = true
+	}
 	return nil
 }
 
@@ -460,24 +460,42 @@ type change struct {
 	remove bool
 }
 
-func putBlob(repo *git.Repository, gitDir string, content []byte) (plumbing.Hash, error) {
+// objSink recuerda los objetos que se crearon para un commit: son los únicos
+// que hay que mandar al NAS.
+type objSink struct{ blobs, others []plumbing.Hash }
+
+func (s *objSink) add(h plumbing.Hash) {
+	if s != nil {
+		s.others = append(s.others, h)
+	}
+}
+
+func (s *objSink) addBlob(h plumbing.Hash) {
+	if s != nil {
+		s.blobs = append(s.blobs, h)
+	}
+}
+
+func putBlob(repo *git.Repository, gitDir string, content []byte, sink *objSink) (plumbing.Hash, error) {
 	h := plumbing.ComputeHash(plumbing.BlobObject, content)
+	sink.addBlob(h)
 	if repo.Storer.HasEncodedObject(h) == nil {
 		return h, nil
 	}
-	return h, writeLoose(gitDir, h, plumbing.BlobObject, int64(len(content)), bytes.NewReader(content))
+	return h, writeLoose(osFS{}, gitDir, h, plumbing.BlobObject, int64(len(content)), bytes.NewReader(content), false)
 }
 
 type encoder interface {
 	Encode(plumbing.EncodedObject) error
 }
 
-func putEncoded(repo *git.Repository, gitDir string, e encoder) (plumbing.Hash, error) {
+func putEncoded(repo *git.Repository, gitDir string, e encoder, sink *objSink) (plumbing.Hash, error) {
 	obj := &plumbing.MemoryObject{}
 	if err := e.Encode(obj); err != nil {
 		return plumbing.ZeroHash, err
 	}
 	h := obj.Hash()
+	sink.add(h)
 	if repo.Storer.HasEncodedObject(h) == nil {
 		return h, nil
 	}
@@ -486,12 +504,12 @@ func putEncoded(repo *git.Repository, gitDir string, e encoder) (plumbing.Hash, 
 		return plumbing.ZeroHash, err
 	}
 	defer rd.Close()
-	return h, writeLoose(gitDir, h, obj.Type(), obj.Size(), rd)
+	return h, writeLoose(osFS{}, gitDir, h, obj.Type(), obj.Size(), rd, false)
 }
 
 // putChanges devuelve el árbol que resulta de aplicar los cambios sobre base,
 // reutilizando todo lo demás sin leerlo. empty indica que la carpeta quedó vacía.
-func putChanges(repo *git.Repository, gitDir string, base *object.Tree, changes map[string]change) (plumbing.Hash, bool, error) {
+func putChanges(repo *git.Repository, gitDir string, base *object.Tree, changes map[string]change, sink *objSink) (plumbing.Hash, bool, error) {
 	entries := map[string]object.TreeEntry{}
 	if base != nil {
 		for _, e := range base.Entries {
@@ -507,7 +525,7 @@ func putChanges(repo *git.Repository, gitDir string, base *object.Tree, changes 
 			case c.remove:
 				delete(entries, head)
 			case c.data != nil || c.blob.IsZero():
-				h, err := putBlob(repo, gitDir, c.data)
+				h, err := putBlob(repo, gitDir, c.data, sink)
 				if err != nil {
 					return plumbing.ZeroHash, false, err
 				}
@@ -531,7 +549,7 @@ func putChanges(repo *git.Repository, gitDir string, base *object.Tree, changes 
 			}
 			child = t
 		}
-		h, empty, err := putChanges(repo, gitDir, child, sub)
+		h, empty, err := putChanges(repo, gitDir, child, sub, sink)
 		if err != nil {
 			return plumbing.ZeroHash, false, err
 		}
@@ -557,7 +575,7 @@ func putChanges(repo *git.Repository, gitDir string, base *object.Tree, changes 
 	if len(list) == 0 {
 		return plumbing.ZeroHash, true, nil
 	}
-	h, err := putEncoded(repo, gitDir, &object.Tree{Entries: list})
+	h, err := putEncoded(repo, gitDir, &object.Tree{Entries: list}, sink)
 	return h, false, err
 }
 
@@ -571,8 +589,9 @@ func (r *Repo) tip(repo *git.Repository, branch string) (plumbing.Hash, error) {
 
 // commitSpec describe un commit que mueve la rama target.
 type commitSpec struct {
-	Target string // rama que avanza
-	From   string // rama cuya punta es el padre (por defecto, Target)
+	Target string   // rama que avanza
+	From   string   // rama cuya punta es el padre (por defecto, Target)
+	Need   []string // otras ramas que Build lee y hay que traer del NAS
 	Msg    string
 	Actor  string
 	// Build recibe la punta sobre la que se construye (puede cambiar entre
@@ -580,10 +599,10 @@ type commitSpec struct {
 	Build func(base plumbing.Hash) (map[string]change, []plumbing.Hash, error)
 }
 
-var errRetry = errors.New("reintentar")
-
 // commit arma el commit sin tocar el directorio de trabajo, lo publica y
-// avanza la rama local. Si otro equipo publicó antes, rehace sobre su punta.
+// avanza la rama local. Solo lee del NAS las ramas que necesita (una lectura de
+// archivo cada una) y solo manda los objetos que creó. Si otro equipo publicó
+// antes, rehace sobre su punta.
 func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 	repo, err := open(r.Local)
 	if err != nil {
@@ -595,10 +614,12 @@ func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 	if from == "" {
 		from = spec.Target
 	}
+	need := append([]string{from, spec.Target}, spec.Need...)
+	sent := map[plumbing.Hash]bool{}
 
 	for attempt := 0; attempt < 6; attempt++ {
 		t0 := time.Now()
-		if err := r.Fetch(); err != nil {
+		if err := r.RefreshBranches(need...); err != nil {
 			return plumbing.ZeroHash, err
 		}
 		tFetch := time.Since(t0)
@@ -618,7 +639,8 @@ func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
-		tree, empty, err := putChanges(repo, gitDir, baseTree, changes)
+		sink := &objSink{}
+		tree, empty, err := putChanges(repo, gitDir, baseTree, changes, sink)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -630,14 +652,15 @@ func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 			Author: *sig, Committer: *sig, Message: spec.Msg,
 			TreeHash: tree, ParentHashes: append([]plumbing.Hash{base}, extra...),
 		}
-		hash, err := putEncoded(repo, gitDir, c)
+		hash, err := putEncoded(repo, gitDir, c, sink)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
 		tBuild := time.Since(t0) - tFetch
-		err = r.publish(repo, spec.Target, hash)
+
+		err = r.publishCommit(repo, spec.Target, hash, c.ParentHashes, sink, sent)
 		if total := time.Since(t0); total > 300*time.Millisecond {
-			slog.Info("commit lento", "rama", spec.Target, "fetch", tFetch.Round(time.Millisecond).String(), "armar", tBuild.Round(time.Millisecond).String(), "publicar", (total - tFetch - tBuild).Round(time.Millisecond).String())
+			slog.Info("commit lento", "rama", spec.Target, "leer", tFetch.Round(time.Millisecond).String(), "armar", tBuild.Round(time.Millisecond).String(), "publicar", (total - tFetch - tBuild).Round(time.Millisecond).String())
 		}
 		if errors.Is(err, git.ErrNonFastForwardUpdate) {
 			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
@@ -652,6 +675,50 @@ func (r *Repo) commit(spec commitSpec) (plumbing.Hash, error) {
 		return hash, nil
 	}
 	return plumbing.ZeroHash, errors.New("la rama cambia demasiado rápido; reintentá en unos segundos")
+}
+
+// publishCommit elige el camino: si todos los padres son puntas que ya están en
+// el NAS, solo se mandan los objetos nuevos; si no (hay commits locales sin
+// publicar), se recorre el historial.
+func (r *Repo) publishCommit(repo *git.Repository, target string, hash plumbing.Hash, parents []plumbing.Hash, sink *objSink, sent map[plumbing.Hash]bool) error {
+	tracked := map[plumbing.Hash]bool{}
+	if refs, err := repo.References(); err == nil {
+		_ = refs.ForEach(func(ref *plumbing.Reference) error {
+			if ref.Name().IsRemote() {
+				tracked[ref.Hash()] = true
+			}
+			return nil
+		})
+		refs.Close()
+	}
+	fast := true
+	for _, p := range parents {
+		if !tracked[p] {
+			fast = false
+		}
+	}
+	if !fast {
+		return r.publish(repo, target, hash)
+	}
+	if err := r.publishFast(repo, target, hash, sink, sent); err != nil {
+		return err
+	}
+	// La referencia solo avanza desde la punta que acabamos de leer del NAS
+	// (casRef verifica que siga ahí: si otro equipo se adelantó, se reintenta).
+	var old plumbing.Hash
+	if tr, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", target), true); err == nil {
+		old = tr.Hash()
+		okAnc := false
+		if cc, err := repo.CommitObject(old); err == nil {
+			if tc, err := repo.CommitObject(hash); err == nil {
+				okAnc, _ = cc.IsAncestor(tc)
+			}
+		}
+		if !okAnc {
+			return git.ErrNonFastForwardUpdate
+		}
+	}
+	return r.finishPublish(repo, target, old, hash)
 }
 
 // FileInfoAt devuelve el hash del blob y su tamaño sin leer el contenido.
@@ -675,51 +742,6 @@ func (r *Repo) FileInfoAt(revision, p string) (string, int64, error) {
 		return "", 0, os.ErrNotExist
 	}
 	return e.Hash.String(), r.blobSize(repo, e.Hash), nil
-}
-
-const tokenFile = "lcs-rev"
-
-type tokenState struct {
-	token string
-	at    time.Time
-}
-
-type tokenMap struct{ m sync.Map }
-
-func (t *tokenMap) get(k string) (tokenState, bool) {
-	v, ok := t.m.Load(k)
-	if !ok {
-		return tokenState{}, false
-	}
-	return v.(tokenState), true
-}
-
-func (t *tokenMap) set(k string, v tokenState) { t.m.Store(k, v) }
-
-var tokens tokenMap
-
-func readToken(bare string) string {
-	b, err := os.ReadFile(filepath.Join(bare, tokenFile))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// bumpToken avisa a los demás equipos que el repositorio cambió. Se escribe
-// DESPUÉS de mover la referencia: quien lea el token nuevo ya ve la referencia.
-func bumpToken(bare string) {
-	var rnd [8]byte
-	_, _ = rand.Read(rnd[:])
-	val := fmt.Sprintf("%d-%x", time.Now().UnixNano(), rnd)
-	tmp := filepath.Join(bare, tokenFile+".tmp-"+fmt.Sprintf("%x", rnd[:4]))
-	if err := os.WriteFile(tmp, []byte(val), 0o644); err != nil {
-		return
-	}
-	if err := os.Rename(tmp, filepath.Join(bare, tokenFile)); err != nil {
-		_ = os.Remove(tmp)
-		_ = os.WriteFile(filepath.Join(bare, tokenFile), []byte(val), 0o644)
-	}
 }
 
 // timeMap guarda cuándo se trajo por última vez cada clon.
@@ -778,9 +800,6 @@ func (r *Repo) blobSize(repo *git.Repository, h plumbing.Hash) int64 {
 	sizeCache.Store(h, size)
 	return size
 }
-
-// RemoteToken es el token de cambios del repositorio compartido ("" si no existe).
-func (r *Repo) RemoteToken() string { return readToken(r.Bare) }
 
 // RefsSignature resume en qué commit está cada rama local (y main). Si no
 // cambió, tampoco cambió nada de lo que LCS indexa.

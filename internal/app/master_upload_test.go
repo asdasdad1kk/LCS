@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"lcs/internal/vcs"
 )
@@ -75,7 +76,16 @@ func TestDeleteProjectCascade(t *testing.T) {
 	if p, _ := svc.Store().GetProject(zone.ID); p != nil {
 		t.Fatal("la zona sigue en el índice")
 	}
-	if _, err := os.Stat(filepath.Join(svc.Config().ProjectsDir(), zone.ID)); !os.IsNotExist(err) {
+	// El índice se libera al instante; la carpeta del NAS se borra en segundo plano.
+	gone := false
+	for i := 0; i < 100 && !gone; i++ {
+		_, err := os.Stat(filepath.Join(svc.Config().ProjectsDir(), zone.ID))
+		gone = os.IsNotExist(err)
+		if !gone {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}
+	if !gone {
 		t.Fatal("el repo de la zona sigue en la carpeta compartida")
 	}
 	if p, _ := svc.Store().GetProject(master.ID); p == nil {

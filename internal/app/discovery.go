@@ -32,6 +32,10 @@ func (s *Service) Discover(background bool) int {
 		if existing, _ := s.st.GetProject(id); existing != nil {
 			continue
 		}
+		if _, err := os.Stat(filepath.Join(s.cfg.ProjectsDir(), id, tombstone)); err == nil {
+			s.cleanupDir(id) // borrado en otro equipo y a medias: se termina de limpiar
+			continue
+		}
 		bare := filepath.Join(s.cfg.ProjectsDir(), id, "repo.git")
 		if _, err := os.Stat(filepath.Join(bare, "HEAD")); err != nil {
 			continue

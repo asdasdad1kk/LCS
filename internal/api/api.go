@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -45,6 +46,7 @@ func (a *API) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/me", a.wrap(a.me))
 	mux.HandleFunc("GET /api/approvals", a.wrap(a.approvalsPanel))
 	mux.HandleFunc("GET /api/branches/{id}/review", a.wrap(a.review))
+	mux.HandleFunc("GET /api/branches/{id}/state", a.wrap(a.taskState))
 	mux.HandleFunc("POST /api/branches/{id}/approve", a.wrap(a.approve))
 	mux.HandleFunc("POST /api/branches/{id}/reject", a.wrap(a.reject))
 	mux.HandleFunc("POST /api/projects/{id}/import", a.wrap(a.importDrawings))
@@ -73,6 +75,7 @@ func (a *API) Routes() *http.ServeMux {
 func (a *API) wrap(h H) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r); err != nil {
+			slog.Warn("api error", "method", r.Method, "path", r.URL.Path, "err", err.Error())
 			var conflict *vcs.ErrConflict
 			var needs *app.ErrNeedsApproval
 			switch {
@@ -157,7 +160,7 @@ func (a *API) activity(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) listProjects(w http.ResponseWriter, r *http.Request) error {
 	// Proyectos que otras personas crearon en la carpeta compartida.
-	a.svc.MaybeDiscover(30 * time.Second)
+	go a.svc.MaybeDiscover(30 * time.Second) // en segundo plano: listar nunca espera al NAS
 	projects, err := a.svc.Store().ListProjects()
 	if err != nil {
 		return err
@@ -550,7 +553,11 @@ func (a *API) upload(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, 200, b)
+	state, _ := a.svc.TaskState(r.PathValue("id"))
+	writeJSON(w, 200, struct {
+		*store.Branch
+		State *app.TaskState `json:"state"`
+	}{b, state})
 	return nil
 }
 
@@ -576,7 +583,11 @@ func (a *API) merge(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, 200, res)
+	state, _ := a.svc.TaskState(r.PathValue("id"))
+	writeJSON(w, 200, struct {
+		*vcs.MergeResult
+		State *app.TaskState `json:"state"`
+	}{res, state})
 	return nil
 }
 
@@ -584,7 +595,8 @@ func (a *API) closeBranch(w http.ResponseWriter, r *http.Request) error {
 	if err := a.svc.CloseBranch(r.PathValue("id"), a.svc.Config().Actor); err != nil {
 		return err
 	}
-	writeJSON(w, 200, map[string]any{"ok": true})
+	state, _ := a.svc.TaskState(r.PathValue("id"))
+	writeJSON(w, 200, map[string]any{"ok": true, "state": state})
 	return nil
 }
 
@@ -673,11 +685,14 @@ func (a *API) decide(w http.ResponseWriter, r *http.Request, decision string) er
 		Comment string `json:"comment"`
 	}
 	_ = readJSON(r, &body)
-	v, err := a.svc.Decide(r.PathValue("id"), decision, body.Comment)
+	if _, err := a.svc.Decide(r.PathValue("id"), decision, body.Comment); err != nil {
+		return err
+	}
+	state, err := a.svc.TaskState(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	writeJSON(w, 200, v)
+	writeJSON(w, 200, state)
 	return nil
 }
 
@@ -754,5 +769,14 @@ func (a *API) timeline(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, 200, rows)
+	return nil
+}
+
+func (a *API) taskState(w http.ResponseWriter, r *http.Request) error {
+	st, err := a.svc.FreshTaskState(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, st)
 	return nil
 }

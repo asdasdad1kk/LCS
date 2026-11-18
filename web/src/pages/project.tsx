@@ -46,7 +46,7 @@ export function ProjectPage() {
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const navigate = useNavigate()
-  const shell = useOutletContext<{ reloadProjects?: () => void } | null>()
+  const shell = useOutletContext<{ reloadProjects?: () => void; removeProjects?: (ids: string[]) => void } | null>()
   const [data, setData] = useState<ProjectDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [newTask, setNewTask] = useState(false)
@@ -486,10 +486,12 @@ export function ProjectPage() {
               onClick={async () => {
                 setDeleteBusy(true)
                 try {
-                  await api.deleteProject(projectId)
+                  const res = await api.deleteProject(projectId)
+                  // La barra lateral se actualiza ya, con lo que respondió el servidor.
+                  shell?.removeProjects?.(res.deleted)
+                  navigate(parent ? `/p/${parent.id}` : '/proyectos', { replace: true })
                   toast.success(isZone ? 'Subproyecto borrado' : 'Proyecto borrado')
-                  shell?.reloadProjects?.()
-                  navigate(parent ? `/p/${parent.id}` : '/proyectos')
+                  void shell?.reloadProjects?.()
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : 'no pude borrar el proyecto')
                   setDeleteBusy(false)

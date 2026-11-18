@@ -106,10 +106,10 @@ func (s *Service) IntegrateZone(zoneID, strategy, actor string) (*vcs.MergeResul
 	// pueden esperarse entre sí.
 	err = masterRepo.WithLock(func() error {
 		return subRepo.WithLock(func() error {
-			if err := subRepo.Pull(vcs.MainBranch); err != nil {
+			if err := subRepo.SyncSome(vcs.MainBranch); err != nil {
 				return err
 			}
-			if err := masterRepo.Pull(vcs.MainBranch); err != nil {
+			if err := masterRepo.SyncSome(vcs.MainBranch); err != nil {
 				return err
 			}
 			// El estado leído antes del lock puede haber quedado viejo.
@@ -174,7 +174,7 @@ func (s *Service) IntegrateZone(zoneID, strategy, actor string) (*vcs.MergeResul
 			if err != nil {
 				return err
 			}
-			if err := s.reconcileLocked(master.ID, masterRepo); err != nil {
+			if err := s.reindexLocal(master.ID, masterRepo); err != nil {
 				return err
 			}
 			if err := s.st.SetIntegration(sub.ID, changes.Head, commit); err != nil {

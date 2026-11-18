@@ -120,12 +120,19 @@ func Init(bare, local string, pf ProjectFile, actor string) error {
 		}
 	}
 
-	// Shared bare repo.
-	if _, err := os.Stat(filepath.Join(bare, "HEAD")); err != nil {
-		if _, err := git.PlainInitWithOptions(bare, &git.PlainInitOptions{
-			InitOptions: git.InitOptions{DefaultBranch: plumbing.Main},
-			Bare:        true,
-		}); err != nil {
+	// Shared bare repo: la estructura mínima a mano (go-git crea decenas de
+	// archivos y carpetas; sobre un NAS cada uno es un viaje de red).
+	if _, err := nas.Stat(filepath.Join(bare, "HEAD")); err != nil {
+		for _, d := range []string{"objects", filepath.Join("refs", "heads")} {
+			if err := nas.MkdirAll(filepath.Join(bare, d), 0o755); err != nil {
+				return fmt.Errorf("init bare: %w", err)
+			}
+		}
+		if err := nas.WriteFile(filepath.Join(bare, "config"), []byte("[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = true\n"), 0o644); err != nil {
+			return fmt.Errorf("init bare: %w", err)
+		}
+		// HEAD al final: es lo que marca que el repositorio existe.
+		if err := nas.WriteFile(filepath.Join(bare, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 			return fmt.Errorf("init bare: %w", err)
 		}
 	}
@@ -277,14 +284,10 @@ func (r *Repo) DeleteBranch(name string) error {
 		return err
 	}
 	defer closeRepo(repo)
-	if bare, err := git.PlainOpen(r.Bare); err == nil {
-		_ = bare.Storer.RemoveReference(branchRef(name))
-		closeRepo(bare)
-		bumpToken(r.Bare)
+	if err := nas.Remove(refPath(r.Bare, name)); err == nil {
+		markGone(r.Bare, name)
 	}
 	_ = repo.Storer.RemoveReference(plumbing.NewRemoteReferenceName("origin", name))
-	fetchedAt.set(r.Local, time.Time{})
-	tokens.m.Delete(r.Local)
 	return repo.Storer.RemoveReference(branchRef(name))
 }
 
@@ -517,7 +520,7 @@ func (r *Repo) MergeBranch(branch, baseCommit, actor, strategy, message string) 
 
 	var applied []string
 	h, err := r.commit(commitSpec{
-		Target: MainBranch, Msg: message, Actor: actor,
+		Target: MainBranch, Msg: message, Actor: actor, Need: []string{branch},
 		Build: func(mainHead plumbing.Hash) (map[string]change, []plumbing.Hash, error) {
 			branchHead, err := r.tip(repo, branch)
 			if err != nil {

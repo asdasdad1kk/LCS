@@ -16,8 +16,7 @@ import {
   uploadToBranch,
   type Branch,
   type Drawing,
-  type Editor
-} from '@/lib/api'
+  type Editor, type TaskState } from '@/lib/api'
 import {
   Dialog,
   DialogContent,
@@ -385,7 +384,7 @@ export function UploadDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
   branch: Branch
-  onDone: () => void
+  onDone: (state?: TaskState) => void
 }) {
   const [file, setFile] = useState<File | null>(null)
   const [message, setMessage] = useState('')
@@ -405,12 +404,13 @@ export function UploadDialog({
     setBusy(true)
     setPct(0)
     try {
-      await uploadToBranch(branch.id, file, message, setPct)
-      toast.success('Cambios subidos', { description: file.name })
+      const res = await uploadToBranch(branch.id, file, message, setPct)
       setFile(null)
       setMessage('')
       onOpenChange(false)
-      onDone()
+      // Primero se actualiza la pantalla con lo que respondió el servidor; el aviso va después.
+      onDone(res.state)
+      toast.success('Cambios subidos', { description: file.name })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'falló la subida')
     } finally {

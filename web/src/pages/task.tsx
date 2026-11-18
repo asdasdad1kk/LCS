@@ -20,7 +20,7 @@ import {
   Upload
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, ApiError, type Branch, type ReviewView, type Snapshot } from '@/lib/api'
+import { api, ApiError, type Branch, type ReviewView, type Snapshot, type TaskState } from '@/lib/api'
 import { ApprovalActions, ApprovalChain } from '@/components/approval-chain'
 import { BranchTimeline } from '@/components/branch-timeline'
 import { Button } from '@/components/ui/button'
@@ -70,29 +70,33 @@ export function TaskPage() {
     }
   }, [taskId])
 
-  // La revisión recalcula en git qué planos cambiaron y corrige la copia local;
-  // la tarea se vuelve a leer después para que ambas pantallas coincidan (antes
-  // se leía primero y mostraba "no hay cambios subidos" con datos viejos).
+  // Una sola consulta trae la tarea y su revisión; las acciones (subir, aprobar,
+  // integrar) devuelven el mismo estado y la pantalla se actualiza con eso, sin
+  // otra ronda de consultas (antes salía el aviso y la pantalla seguía vieja).
+  const applyState = useCallback((s?: TaskState) => {
+    if (!s) return
+    setBranch(s.branch)
+    setReview(s.review)
+  }, [])
+
   const loadReview = useCallback(async () => {
     try {
-      setReview(await api.review(taskId))
-      setBranch(await api.branch(taskId))
+      applyState(await api.taskState(taskId))
     } catch {
-      /* las aprobaciones son secundarias: la tarea se ve igual */
+      /* el estado se vuelve a pedir en el próximo ciclo */
     }
-  }, [taskId])
+  }, [taskId, applyState])
 
   const load = useCallback(async () => {
     try {
-      setBranch(await api.branch(taskId))
+      applyState(await api.taskState(taskId))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'no pude cargar la tarea')
     } finally {
       setLoading(false)
     }
-    await loadReview()
     void loadSnapshots()
-  }, [taskId, loadReview, loadSnapshots])
+  }, [taskId, applyState, loadSnapshots])
 
   useEffect(() => {
     load()
@@ -111,12 +115,12 @@ export function TaskPage() {
   const decide = async (kind: 'approve' | 'reject', comment: string) => {
     try {
       const next = kind === 'approve' ? await api.approve(taskId, comment) : await api.reject(taskId, comment)
-      setReview(next)
-      shell?.reloadProjects?.()
+      applyState(next)
       toast.success(kind === 'approve' ? 'Aprobaste esta versión' : 'Rechazaste esta versión', {
         description:
-          kind === 'approve' && next.complete ? 'Ya la aprobaron todos: se puede integrar.' : undefined
+          kind === 'approve' && next.review.complete ? 'Ya la aprobaron todos: se puede integrar.' : undefined
       })
+      void shell?.reloadProjects?.()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'no pude registrar tu decisión')
       await loadReview()
@@ -154,25 +158,26 @@ export function TaskPage() {
     setMerging(true)
     try {
       const res = await api.mergeBranch(taskId, strategy)
+      // La pantalla ya tiene el estado final antes de que aparezca el aviso.
+      applyState(res.state)
+      setConflict(null)
       toast.success('Tarea integrada en main', {
         description: `${res.paths.length} archivo(s) · ${shortSha(res.commit)}`
       })
-      setConflict(null)
-      await load()
-      shell?.reloadProjects?.()
-      // Una zona que cambió deja al master atrasado: avisar en el momento.
-      try {
-        const detail = await api.project(projectId)
-        if (detail.parent && detail.integration && detail.integration.changed.length + detail.integration.removed.length > 0) {
-          toast.warning(`Hay que actualizar el master «${detail.parent.name}»`, {
-            description: 'La zona cambió y el master todavía no tiene esta versión.',
-            duration: 12000,
-            action: { label: 'Ir a actualizar', onClick: () => navigate(`/p/${projectId}`) }
-          })
-        }
-      } catch {
-        /* el aviso es secundario */
-      }
+      void shell?.reloadProjects?.()
+      // Una zona que cambió deja al master atrasado: avisar, sin hacer esperar a nadie.
+      void api
+        .project(projectId)
+        .then((detail) => {
+          if (detail.parent && detail.integration && detail.integration.changed.length + detail.integration.removed.length > 0) {
+            toast.warning(`Hay que actualizar el master «${detail.parent.name}»`, {
+              description: 'La zona cambió y el master todavía no tiene esta versión.',
+              duration: 12000,
+              action: { label: 'Ir a actualizar', onClick: () => navigate(`/p/${projectId}`) }
+            })
+          }
+        })
+        .catch(() => {})
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.payload?.needsApproval) {
         // Alguien subió un plano nuevo o cambió la cadena desde que se abrió la pantalla.
@@ -604,9 +609,10 @@ export function TaskPage() {
         open={uploading}
         onOpenChange={setUploading}
         branch={branch}
-        onDone={async () => {
+        onDone={(s) => {
+          applyState(s)
           setTab('compare')
-          await load()
+          void loadSnapshots()
         }}
       />
 
@@ -662,10 +668,10 @@ export function TaskPage() {
               onClick={async () => {
                 setClosingBusy(true)
                 try {
-                  await api.closeBranch(branch.id)
-                  toast.success('Tarea descartada')
+                  const res = await api.closeBranch(branch.id)
+                  applyState(res.state)
                   setClosing(false)
-                  await load()
+                  toast.success('Tarea descartada')
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : 'no pude descartar la tarea')
                 } finally {

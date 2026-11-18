@@ -619,7 +619,7 @@ func (s *Service) Decide(branchID, decision, comment string) (*ReviewView, error
 
 	err = repo.WithLock(func() error {
 		// Decidir sobre datos viejos es decidir a ciegas: traer lo último.
-		if err := repo.SyncBranches(); err != nil {
+		if err := repo.SyncSome(b.Name, vcs.MainBranch); err != nil {
 			return err
 		}
 		_ = s.refreshProjectFile(b.ProjectID, repo)
@@ -764,7 +764,7 @@ func (s *Service) SetApprovers(projectID string, in []vcs.Approver) (*ApproversV
 	err = repo.WithLock(func() error {
 		var last error
 		for attempt := 0; attempt < 3; attempt++ {
-			if err := repo.Pull(vcs.MainBranch); err != nil {
+			if err := repo.SyncSome(vcs.MainBranch); err != nil {
 				return err
 			}
 			pf, err := repo.ReadProjectFile()

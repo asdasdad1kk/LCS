@@ -122,6 +122,7 @@ func EnsureClone(bare, local string) error {
 	}
 	return nil
 }
+
 // TryLock ejecuta fn solo si nadie más está usando el clon; si está ocupado
 // devuelve false sin esperar.
 func (r *Repo) TryLock(fn func() error) (bool, error) {

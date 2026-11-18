@@ -132,6 +132,7 @@ export function AppShell() {
         onNewProject={() => setNewProject(true)}
         onAppearance={() => setAppearance(true)}
         reloadProjects={load}
+        removeProjects={(ids) => setProjects((cur) => cur.filter((x) => !ids.includes(x.id)))}
         navigate={(to) => (typeof to === 'number' ? navigate(to) : navigate(to))}
       />
 
@@ -162,6 +163,7 @@ type ShellBodyProps = {
   onNewProject: () => void
   onAppearance: () => void
   reloadProjects: () => Promise<void>
+  removeProjects: (ids: string[]) => void
   navigate: (to: string | number) => void
 }
 
@@ -178,6 +180,7 @@ function ShellBody({
   onNewProject,
   onAppearance,
   reloadProjects,
+  removeProjects,
   navigate
 }: ShellBodyProps) {
   const { toggle: toggleSidebar, setOpen, open } = useSidebar()
@@ -385,7 +388,7 @@ function ShellBody({
               })}
             </nav>
           </div>
-          <Outlet context={{ reloadProjects }} />
+          <Outlet context={{ reloadProjects, removeProjects }} />
         </SidebarInset>
       </div>
 
