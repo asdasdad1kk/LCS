@@ -610,7 +610,8 @@ export function TaskPage() {
         onOpenChange={setUploading}
         branch={branch}
         onDone={(s) => {
-          applyState(s)
+          if (s) applyState(s)
+          else void loadReview()
           setTab('compare')
           void loadSnapshots()
         }}

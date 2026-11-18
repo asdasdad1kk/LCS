@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,7 +14,12 @@ import (
 // que lo que se mide es CUÁNTAS se hacen. La prueba simula 30 ms por operación
 // y fija un tope de operaciones para subir, aprobar e integrar en un proyecto
 // con muchas ramas.
-func TestNASOperationBudget(t *testing.T) {
+func TestNASOperationBudget(t *testing.T)       { nasBudget(t, false) }
+func TestNASOperationBudgetLegacy(t *testing.T) { nasBudget(t, true) }
+
+// legacy: el repositorio compartido no tiene lcs-state (proyectos creados con
+// versiones anteriores). Subir, aprobar e integrar no deben recorrer las ramas.
+func nasBudget(t *testing.T, legacy bool) {
 	svc := newTestService(t)
 	p, err := svc.CreateProject(CreateProjectInput{Name: "Planta"})
 	if err != nil {
@@ -35,6 +42,11 @@ func TestNASOperationBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if legacy {
+		if err := os.Remove(filepath.Join(svc.Config().ProjectsDir(), p.ID, "repo.git", "lcs-state")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ops, restore := vcs.InstrumentNAS(30 * time.Millisecond)
 	defer restore()
 	step := func(name string, budget int64, fn func() error) {
@@ -49,6 +61,11 @@ func TestNASOperationBudget(t *testing.T) {
 		t.Logf("%-10s %3d operaciones en el NAS, %d aperturas de repo, %v", name, n, o1-o0, time.Since(start).Round(time.Millisecond))
 		if n > budget {
 			t.Errorf("%s: %d operaciones contra el NAS, el tope es %d", name, n, budget)
+		}
+		// Abrir el repositorio del NAS con go-git cuesta decenas de operaciones que
+		// el contador de archivos no ve: ninguna acción normal debe hacerlo.
+		if o1-o0 != 0 {
+			t.Errorf("%s: abrió el repositorio compartido %d veces con go-git (debe ser 0)", name, o1-o0)
 		}
 	}
 

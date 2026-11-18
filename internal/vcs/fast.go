@@ -443,10 +443,13 @@ func (r *Repo) publishFast(local *git.Repository, branch string, tip plumbing.Ha
 	for _, h := range blobs {
 		sent[h] = true
 	}
-	if err := parallelCopyMode(src, dst, rest, true); err != nil {
-		return err
-	}
+	// Árboles y commit de uno en uno y en el orden en que se crearon (hijos
+	// antes que padres): nunca debe existir en el NAS un árbol sin sus hijos,
+	// porque el recorrido lento da por completo a todo árbol que ya está allí.
 	for _, h := range rest {
+		if err := copyObjectMode(src, dst, h, true); err != nil {
+			return err
+		}
 		sent[h] = true
 	}
 	return nil

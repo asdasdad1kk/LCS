@@ -162,12 +162,10 @@ func writeState(bare string, st *repoState) error {
 func touchState(bare string, mutate func(refs map[string]string)) *repoState {
 	st, _ := readState(bare)
 	if st == nil {
-		st = &repoState{Refs: map[string]string{}}
-		if refs, err := fullRefs(bare); err == nil {
-			for n, h := range refs {
-				st.Refs[n] = h.String()
-			}
-		}
+		// Repositorio sin estado (anterior a esta versión): armarlo exige
+		// recorrer todas las ramas, y eso no se hace en medio de una acción.
+		// Lo arma quien lee (ver Fetch); mientras tanto los lectores recorren.
+		return nil
 	}
 	mutate(st.Refs)
 	for n, at := range st.Gone {
@@ -346,11 +344,9 @@ func (r *Repo) Fetch() error {
 		return err
 	}
 	if st == nil {
-		// Repositorio anterior al archivo de estado: se arma una vez.
-		st = touchState(r.Bare, func(map[string]string) {})
-		if st == nil {
-			return r.fullScan()
-		}
+		// Repositorio anterior al archivo de estado: se recorre una vez y se
+		// deja armado (cuesta una operación por rama, una sola vez).
+		return r.bootstrapState()
 	}
 	seen, known := seenStates.get(r.Local)
 	if known && seen.rev == st.Rev {
@@ -514,21 +510,45 @@ func (r *Repo) SyncSome(names ...string) error {
 // fullScan recorre todas las referencias del repositorio compartido, trae lo
 // que falte y retira las ramas que ya no existen. Cuesta un archivo por rama.
 func (r *Repo) fullScan() error {
+	_, err := r.fullScanRefs()
+	return err
+}
+
+// bootstrapState recorre todas las ramas y escribe el estado si nadie lo hizo antes.
+func (r *Repo) bootstrapState() error {
+	remote, err := r.fullScanRefs()
+	if err != nil {
+		return err
+	}
+	if cur, _ := readState(r.Bare); cur != nil {
+		return nil
+	}
+	st := &repoState{Rev: newRev(), Refs: make(map[string]string, len(remote))}
+	for n, h := range remote {
+		st.Refs[n] = h.String()
+	}
+	if err := writeState(r.Bare, st); err == nil {
+		seenStates.set(r.Local, stateSeen{rev: st.Rev, at: time.Now(), scanAt: time.Now()})
+	}
+	return nil
+}
+
+func (r *Repo) fullScanRefs() (map[string]plumbing.Hash, error) {
 	defer slow("fullScan")()
 	remote, err := fullRefs(r.Bare)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	strs := make(map[string]string, len(remote))
 	for n, h := range remote {
 		strs[n] = h.String()
 	}
 	if err := r.applyRefs(strs); err != nil {
-		return err
+		return nil, err
 	}
 	local, err := open(r.Local)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeRepo(local)
 	stale := []plumbing.ReferenceName{}
@@ -552,7 +572,7 @@ func (r *Repo) fullScan() error {
 	for _, n := range stale {
 		_ = local.Storer.RemoveReference(n)
 	}
-	return nil
+	return remote, nil
 }
 
 // RemoteToken es la revisión del repositorio compartido ("" si no hay estado).
